@@ -22,12 +22,13 @@ export default function OverviewPage() {
     stocks: t.stocks,
     crypto: t.crypto,
     cash: t.cash,
+    twFutures: t.twFutures,
     realEstate: t.realEstateEquity,
   };
   const positive = CATEGORY_ORDER.reduce((a, c) => a + Math.max(0, parts[c]), 0);
   const share = (c: Category) => (positive > 0 ? (Math.max(0, parts[c]) / positive) * 100 : 0);
 
-  const positions = [...p.stocks, ...p.crypto, ...p.futures, ...p.cash]
+  const positions = [...p.stocks, ...p.crypto, ...p.futures, ...p.twFutures, ...p.cash]
     .map((x) => x.position)
     .sort((a, b) => b.valueTwd - a.valueTwd)
     .slice(0, 10);
@@ -35,10 +36,19 @@ export default function OverviewPage() {
   // Chart ends at the live number shown in the hero, not at today's (possibly stale) snapshot.
   const trend = [
     ...toTrend(snapshots.filter((s) => s.date < today)),
-    { date: today, netWorth: t.netWorth, stocks: t.stocks, crypto: t.crypto, cash: t.cash, realEstateEquity: t.realEstateEquity },
+    {
+      date: today,
+      netWorth: t.netWorth,
+      stocks: t.stocks,
+      crypto: t.crypto,
+      cash: t.cash,
+      twFutures: t.twFutures,
+      realEstateEquity: t.realEstateEquity,
+    },
   ];
 
-  const isEmpty = p.cash.length + p.stocks.length + p.crypto.length + p.futures.length + p.properties.length === 0;
+  const isEmpty =
+    p.cash.length + p.stocks.length + p.crypto.length + p.futures.length + p.twFutures.length + p.properties.length === 0;
 
   return (
     <>
@@ -72,6 +82,7 @@ export default function OverviewPage() {
           <Card className="px-5 py-6 text-[13px] text-fg-2">
             還沒有任何資產。從左側選單的 <Link className="text-accent" href="/stocks">股票</Link>、
             <Link className="text-accent" href="/crypto">加密貨幣</Link>、<Link className="text-accent" href="/cash">現金</Link>、
+            <Link className="text-accent" href="/futures">期貨</Link>、
             <Link className="text-accent" href="/real-estate">房地產</Link> 開始新增。
           </Card>
         )}
@@ -85,7 +96,7 @@ export default function OverviewPage() {
             value={t.totalAssets > 0 ? fmtPct((t.totalLiabilities / t.totalAssets) * 100, false) : "—"}
             sub="總負債 ÷ 總資產"
           />
-          <Stat label="流動資產" value={fmtTwd(t.cash + t.stocks + t.crypto)} sub="現金 + 股票 + 加密貨幣" />
+          <Stat label="流動資產" value={fmtTwd(t.cash + t.stocks + t.crypto + t.twFutures)} sub="現金、股票、加密貨幣、期貨" />
         </Card>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

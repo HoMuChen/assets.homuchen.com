@@ -8,6 +8,7 @@ export function toTrend(rows: SnapshotRow[]): TrendPoint[] {
     stocks: s.stocks,
     crypto: s.crypto,
     cash: s.cash,
+    twFutures: s.tw_futures,
     realEstateEquity: s.real_estate - s.mortgage,
   }));
 }

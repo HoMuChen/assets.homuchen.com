@@ -14,6 +14,7 @@ services:
     env_file: .env
     environment:
       NODE_OPTIONS: --max-old-space-size=256
+      SINOPAC_URL: http://sinopac:8000
     ports:
       - "127.0.0.1:3100:3000"
     # SQLite lives on the host (/opt/assets/data) so backup.sh can read it; the container runs as uid 1000 = deploy
@@ -32,8 +33,33 @@ services:
       start_period: 20s
       retries: 3
     mem_limit: 384m
-    logging:
+    logging: &logging
       driver: json-file
       options:
         max-size: 10m
         max-file: "3"
+
+  # Read-only SinoPac bridge: keeps a Shioaji session and answers GET /margin on the compose network only.
+  # Same image, different command. Keys live in sinopac.env so the app container never sees them.
+  sinopac:
+    image: ${ASSETS_IMAGE:?ASSETS_IMAGE is required}
+    init: true
+    restart: unless-stopped
+    command: ["/opt/sinopac/bin/python", "-u", "/app/sinopac/server.py"]
+    # shioaji writes shioaji.log into the working directory; /app is not writable by node
+    working_dir: /tmp
+    env_file: sinopac.env
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/opt/sinopac/bin/python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4)",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    mem_limit: 256m
+    logging: *logging

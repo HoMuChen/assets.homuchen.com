@@ -43,3 +43,7 @@ next-env.d.ts
 # local data
 /data/
 !.env.example
+
+# SinoPac sidecar (local runs)
+shioaji.log
+__pycache__/

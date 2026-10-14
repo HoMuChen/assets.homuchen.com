@@ -19,6 +19,7 @@ import {
 import { db } from "./db";
 import { lookupTwStockName, refreshPrices, resolveCoin } from "./prices";
 import { takeSnapshot } from "./snapshot";
+import { sinopacConfigured, syncSinopac } from "./tw-futures";
 
 export type ActionState = { ok: boolean; error?: string } | null;
 
@@ -71,6 +72,9 @@ const FIELD_LABEL: Record<string, string> = {
   quantity: "數量",
   entry_price: "開倉均價",
   leverage: "槓桿",
+  broker: "券商",
+  source: "資料來源",
+  equity: "權益數",
 };
 
 function firstError(e: z.ZodError): string {
@@ -266,6 +270,52 @@ export async function saveFuturesPosition(_: ActionState, fd: FormData): Promise
   });
 }
 
+// ---------- futures (Taiwan / TAIFEX) ----------
+
+const TwFuturesSchema = z
+  .object({
+    id,
+    name: z.string().trim().min(1, "必填"),
+    broker: text,
+    source: z.enum(["manual", "sinopac"], { message: "請選擇資料來源" }),
+    equity: optNum,
+    note: text,
+  })
+  .refine((v) => v.source === "sinopac" || v.equity != null, { message: "必填", path: ["equity"] });
+
+export async function saveTwFutures(_: ActionState, fd: FormData): Promise<ActionState> {
+  return guarded(async () => {
+    const v = TwFuturesSchema.parse(fields(fd));
+    if (v.source === "sinopac" && !sinopacConfigured()) {
+      return { ok: false, error: "伺服器沒有設定永豐 API（SINOPAC_URL），請改用手動輸入" };
+    }
+    if (v.id) {
+      // Switching to manual keeps the last synced equity as the starting value.
+      db()
+        .prepare(
+          `UPDATE tw_futures_accounts SET name=@name, broker=@broker, source=@source,
+           equity=CASE WHEN @source = 'manual' THEN @equity ELSE equity END,
+           synced_at=CASE WHEN @source = 'manual' THEN NULL ELSE synced_at END,
+           sync_error=CASE WHEN @source = 'manual' THEN NULL ELSE sync_error END,
+           note=@note, updated_at=datetime('now') WHERE id=@id`,
+        )
+        .run(v);
+    } else {
+      db()
+        .prepare(
+          `INSERT INTO tw_futures_accounts (name, broker, source, equity, note)
+           VALUES (@name, @broker, @source, COALESCE(@equity, 0), @note)`,
+        )
+        .run(v);
+    }
+    if (v.source === "sinopac") {
+      const { error } = await syncSinopac();
+      if (error) return { ok: false, error: `已儲存，但同步失敗：${error}` };
+    }
+    return done();
+  });
+}
+
 // ---------- real estate ----------
 
 const PropertySchema = z.object({
@@ -318,6 +368,7 @@ const TABLES = {
   property: "properties",
   futuresAccount: "futures_accounts",
   futuresPosition: "futures_positions",
+  twFutures: "tw_futures_accounts",
 } as const;
 
 export async function deleteItem(kind: keyof typeof TABLES, itemId: number): Promise<ActionState> {

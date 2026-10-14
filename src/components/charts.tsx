@@ -4,7 +4,15 @@ import { useMemo, useState } from "react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { fmtCompact, fmtTwd } from "@/lib/format";
 
-export type TrendPoint = { date: string; netWorth: number; stocks: number; crypto: number; cash: number; realEstateEquity: number };
+export type TrendPoint = {
+  date: string;
+  netWorth: number;
+  stocks: number;
+  crypto: number;
+  cash: number;
+  twFutures: number;
+  realEstateEquity: number;
+};
 
 const RANGES = [
   { key: "1M", days: 31 },
@@ -127,6 +135,7 @@ const STACK = [
   { key: "crypto", label: "加密貨幣", color: "var(--series-2)" },
   { key: "cash", label: "現金", color: "var(--series-3)" },
   { key: "realEstateEquity", label: "房地產淨值", color: "var(--series-4)" },
+  { key: "twFutures", label: "期貨", color: "var(--series-5)" },
 ] as const;
 
 export function CompositionChart({ data }: { data: TrendPoint[] }) {

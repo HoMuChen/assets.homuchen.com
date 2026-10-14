@@ -34,6 +34,7 @@ export default function HistoryPage() {
                     <th className={`${th} text-right`}>股票</th>
                     <th className={`${th} text-right`}>加密貨幣</th>
                     <th className={`${th} text-right`}>現金</th>
+                    <th className={`${th} text-right`}>期貨</th>
                     <th className={`${th} text-right`}>房產市值</th>
                     <th className={`${th} text-right`}>房貸</th>
                   </tr>
@@ -52,6 +53,7 @@ export default function HistoryPage() {
                         <td className={`${td} num text-right text-fg-2`}>{fmtTwd(s.stocks)}</td>
                         <td className={`${td} num text-right text-fg-2`}>{fmtTwd(s.crypto)}</td>
                         <td className={`${td} num text-right text-fg-2`}>{fmtTwd(s.cash)}</td>
+                        <td className={`${td} num text-right text-fg-2`}>{fmtTwd(s.tw_futures)}</td>
                         <td className={`${td} num text-right text-fg-2`}>{fmtTwd(s.real_estate)}</td>
                         <td className={`${td} num text-right text-fg-3`}>-{fmtTwd(s.mortgage)}</td>
                       </tr>

@@ -37,7 +37,7 @@ install -d -m 0755 /etc/assets
 log "scripts and settings"
 install -m 0755 -o deploy -g deploy "$INFRA_DIR/deploy/deploy.sh" "$ASSETS_HOME/deploy.sh"
 install -m 0755 -o deploy -g deploy "$INFRA_DIR/backup/backup.sh" "$ASSETS_HOME/backup.sh"
-for f in .env:env.production.example backup.env:backup.env.example; do
+for f in .env:env.production.example backup.env:backup.env.example sinopac.env:sinopac.env.example; do
   if [ ! -f "$ASSETS_HOME/${f%%:*}" ]; then
     install -m 0600 -o deploy -g deploy "$INFRA_DIR/vm/${f#*:}" "$ASSETS_HOME/${f%%:*}"
     echo "created $ASSETS_HOME/${f%%:*} from the template; fill it in"
@@ -71,7 +71,7 @@ systemctl reload caddy
 log "done"
 cat <<'EOF'
 Next (README "Production"):
-  1. fill /opt/assets/.env and /opt/assets/backup.env
+  1. fill /opt/assets/.env, /opt/assets/backup.env and (for SinoPac sync) /opt/assets/sinopac.env
   2. sudo -u deploy /opt/assets/deploy.sh          # first deploy
   3. systemctl enable --now assets-deploy.timer assets-backup.timer
 EOF

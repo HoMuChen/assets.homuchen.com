@@ -91,7 +91,8 @@ export function FormDialog({
 
       <dialog
         ref={ref}
-        className="m-auto w-[min(560px,calc(100vw-32px))] rounded-xl border border-line-strong bg-panel p-0 shadow-2xl"
+        // Edit triggers sit in right-aligned table cells; do not inherit that alignment into the form.
+        className="m-auto w-[min(560px,calc(100vw-32px))] rounded-xl border border-line-strong bg-panel p-0 text-left shadow-2xl"
         onClick={(e) => e.target === ref.current && ref.current?.close()}
       >
         <form key={openKey} ref={formRef} action={formAction} onSubmit={() => setSubmittedKey(openKey)}>

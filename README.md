@@ -1,10 +1,11 @@
 # Assets
 
-個人資產儀表板：打開就能看到淨資產、配置與走勢。現金、台股、加密貨幣、房地產（投入現金 + 房貸）統一換算成 TWD。
+個人資產儀表板：打開就能看到淨資產、配置與走勢。現金、台股、加密貨幣、台灣期貨、房地產（投入現金 + 房貸）統一換算成 TWD。
 
 - **即時報價**：台股走 FinMind `taiwan_stock_tick_snapshot`（sponsor 方案，約 10 秒更新；失敗時退回最新收盤價並標示「收盤價」），加密貨幣走 CoinGecko，外幣匯率走 open.er-api.com。頁面開著時每 30 秒更新一次。
 - **每日快照**：每天 23:55（台北時間）自動記錄一次；伺服器啟動時若當天還沒有快照也會補一筆。`歷史快照` 頁可手動觸發。
 - **合約（U 本位）**：每個合約帳戶記錄錢包餘額 (USDT)，底下記錄持倉（方向、數量、開倉均價、槓桿）。淨資產只計入**權益 = 錢包餘額＋未實現損益**，名目價值只用來顯示曝險與實際槓桿；加密貨幣頁另有現貨＋合約的每幣淨曝險。現價以 CoinGecko USD 價格 ÷ USDT 價格估算，和交易所標記價格會有些微差距。
+- **台灣期貨**：每個期貨帳戶只計入**權益數**（帳戶餘額＋未平倉損益）。來源二選一：手動輸入（例如台新），或永豐 API 自動同步（權益數、未平倉損益、可用保證金、風險指標；期貨交易時段每 5 分鐘、其餘每小時，同步失敗時保留上一次的數字）。永豐走 `sinopac/server.py` 這個 sidecar：用 Shioaji 維持一個登入中的 session，只提供 `GET /margin`，只在 compose 內部網路可連；金鑰請用**沒有「交易」權限**、IP 限定 VM 的唯讀 key。
 - **房貸**：依撥款日、利率、年限、寬限期自動計算剩餘本金（本息平均攤還）；有提前還款時可手動覆寫剩餘本金。
 - **漲跌顏色**：台灣慣例紅漲綠跌，並附 ▲▼ 符號。要改成國際慣例，對調 `src/app/globals.css` 的 `--up` / `--down`。
 
@@ -31,6 +32,7 @@ gh workflow run Deploy [-f sha=xxxxxxx]
 | --- | --- |
 | `/opt/assets/.env` | 給 container 的設定（`FINMIND_TOKEN`、`APP_PASSWORD`…），範本 `infra/vm/env.production.example` |
 | `/opt/assets/backup.env` | R2 金鑰，只給 `backup.sh`，範本 `infra/vm/backup.env.example` |
+| `/opt/assets/sinopac.env` | 永豐唯讀 API key（`SJ_API_KEY`、`SJ_SEC_KEY`），只給 sinopac sidecar，範本 `infra/vm/sinopac.env.example` |
 | `/opt/assets/data/assets.db` | SQLite（container 的 `/data`） |
 | `/opt/assets/state/`、`releases.log` | 部署狀態與紀錄，同 HQ |
 | `/etc/caddy/sites/assets.caddy` | edge Caddy 的站台設定，來源 `infra/caddy/assets.caddy` |
@@ -97,6 +99,13 @@ docker compose up -d --build                 # http://localhost:3000；純 HTTP 
 npm install
 cp .env.example .env.local
 npm run dev
+```
+
+要在本機測永豐同步：另開一個終端跑 sidecar，再讓 dev server 指過去。
+
+```bash
+SJ_API_KEY=... SJ_SEC_KEY=... SINOPAC_PORT=8765 uv run --with shioaji==1.7.2 python sinopac/server.py
+SINOPAC_URL=http://127.0.0.1:8765 npm run dev
 ```
 
 ## 架構

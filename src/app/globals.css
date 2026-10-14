@@ -26,6 +26,7 @@
   --series-2: #d95926;
   --series-3: #199e70;
   --series-4: #c98500;
+  --series-5: #d55181;
   --grid: rgba(255, 255, 255, 0.06);
 }
 
@@ -52,6 +53,7 @@
     --series-2: #eb6834;
     --series-3: #1baf7a;
     --series-4: #eda100;
+    --series-5: #e87ba4;
     --grid: rgba(0, 0, 0, 0.06);
   }
 }
@@ -77,6 +79,7 @@
   --color-s2: var(--series-2);
   --color-s3: var(--series-3);
   --color-s4: var(--series-4);
+  --color-s5: var(--series-5);
   --font-sans: var(--font-inter), "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
 }
 

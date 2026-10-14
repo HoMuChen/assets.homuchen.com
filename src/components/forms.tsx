@@ -1,7 +1,8 @@
 "use client";
 
-import { saveCash, saveCrypto, saveFuturesAccount, saveFuturesPosition, saveProperty, saveStock } from "@/lib/actions";
-import type { CashAccount, CryptoHolding, FuturesAccount, FuturesPosition, Property, StockHolding } from "@/lib/db";
+import { useState } from "react";
+import { saveCash, saveCrypto, saveFuturesAccount, saveFuturesPosition, saveProperty, saveStock, saveTwFutures } from "@/lib/actions";
+import type { CashAccount, CryptoHolding, FuturesAccount, FuturesPosition, Property, StockHolding, TwFuturesAccount } from "@/lib/db";
 import { Field, FormDialog, inputCls } from "./form-dialog";
 
 const v = (x: unknown) => (x == null ? "" : String(x));
@@ -138,6 +139,39 @@ export function FuturesPositionForm({ accountId, item }: { accountId: number; it
         <input name="leverage" inputMode="decimal" defaultValue={v(item?.leverage)} placeholder="10" className={`${inputCls} num`} />
       </Field>
       <Field label="備註">
+        <input name="note" defaultValue={v(item?.note)} className={inputCls} />
+      </Field>
+    </FormDialog>
+  );
+}
+
+export function TwFuturesForm({ item, sinopacAvailable }: { item?: TwFuturesAccount; sinopacAvailable: boolean }) {
+  const [source, setSource] = useState<TwFuturesAccount["source"]>(item?.source ?? "manual");
+  return (
+    <FormDialog title={item ? `編輯 ${item.name}` : "新增期貨帳戶"} action={saveTwFutures} trigger={item ? "edit" : "add"} deleteKind="twFutures" deleteId={item?.id}>
+      <input type="hidden" name="id" value={v(item?.id)} />
+      <Field label="帳戶名稱">
+        <input name="name" required defaultValue={v(item?.name)} placeholder="台新期貨" className={inputCls} />
+      </Field>
+      <Field label="券商">
+        <input name="broker" defaultValue={v(item?.broker)} placeholder="台新期貨" className={inputCls} />
+      </Field>
+      <Field label="資料來源" hint={sinopacAvailable ? undefined : "伺服器未設定永豐 API，只能手動輸入"} wide>
+        <select name="source" value={source} onChange={(e) => setSource(e.target.value as TwFuturesAccount["source"])} className={inputCls}>
+          <option value="manual">手動輸入</option>
+          <option value="sinopac" disabled={!sinopacAvailable}>
+            永豐 API（自動同步權益數）
+          </option>
+        </select>
+      </Field>
+      {source === "manual" ? (
+        <Field label="權益數" hint="券商顯示的「權益數」，含未平倉損益" wide>
+          <input name="equity" required inputMode="decimal" defaultValue={v(item?.equity)} className={`${inputCls} num`} />
+        </Field>
+      ) : (
+        <p className="text-[11px] text-fg-4 sm:col-span-2">權益數、未平倉損益、保證金由永豐 API 定時同步（交易時段每 5 分鐘、其餘每小時）。</p>
+      )}
+      <Field label="備註" wide>
         <input name="note" defaultValue={v(item?.note)} className={inputCls} />
       </Field>
     </FormDialog>

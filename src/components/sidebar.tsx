@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { logout, logoutAll } from "@/lib/actions";
-import { IconCash, IconCrypto, IconHistory, IconHouse, IconLogout, IconOverview, IconStock } from "./icons";
+import { IconCash, IconCrypto, IconFutures, IconHistory, IconHouse, IconLogout, IconOverview, IconStock } from "./icons";
 
 const NAV = [
   { href: "/", label: "總覽", icon: IconOverview },
   { href: "/stocks", label: "股票", icon: IconStock },
   { href: "/crypto", label: "加密貨幣", icon: IconCrypto },
+  { href: "/futures", label: "期貨", icon: IconFutures },
   { href: "/cash", label: "現金", icon: IconCash },
   { href: "/real-estate", label: "房地產", icon: IconHouse },
   { href: "/history", label: "歷史快照", icon: IconHistory },

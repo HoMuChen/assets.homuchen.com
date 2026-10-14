@@ -37,6 +37,15 @@ export async function takeSnapshot(): Promise<SnapshotRow> {
       })),
     })),
     usdtTwd: p.usdtTwd,
+    twFutures: p.twFutures.map((a) => ({
+      id: a.id,
+      name: a.name,
+      broker: a.broker,
+      source: a.source,
+      equity: a.equity,
+      openPnl: a.open_pnl,
+      syncedAt: a.synced_at,
+    })),
     properties: p.properties.map((x) => ({
       id: x.id,
       name: x.name,
@@ -56,17 +65,18 @@ export async function takeSnapshot(): Promise<SnapshotRow> {
     stocks: p.totals.stocks,
     crypto: p.totals.crypto,
     real_estate: p.totals.realEstate,
+    tw_futures: p.totals.twFutures,
     mortgage: p.totals.mortgage,
     detail: JSON.stringify(detail),
   };
 
   db()
     .prepare(
-      `INSERT INTO snapshots (date, net_worth, total_assets, total_liabilities, cash, stocks, crypto, real_estate, mortgage, detail, created_at)
-       VALUES (@date, @net_worth, @total_assets, @total_liabilities, @cash, @stocks, @crypto, @real_estate, @mortgage, @detail, datetime('now'))
+      `INSERT INTO snapshots (date, net_worth, total_assets, total_liabilities, cash, stocks, crypto, real_estate, tw_futures, mortgage, detail, created_at)
+       VALUES (@date, @net_worth, @total_assets, @total_liabilities, @cash, @stocks, @crypto, @real_estate, @tw_futures, @mortgage, @detail, datetime('now'))
        ON CONFLICT(date) DO UPDATE SET net_worth=excluded.net_worth, total_assets=excluded.total_assets,
          total_liabilities=excluded.total_liabilities, cash=excluded.cash, stocks=excluded.stocks, crypto=excluded.crypto,
-         real_estate=excluded.real_estate, mortgage=excluded.mortgage, detail=excluded.detail, created_at=excluded.created_at`,
+         real_estate=excluded.real_estate, tw_futures=excluded.tw_futures, mortgage=excluded.mortgage, detail=excluded.detail, created_at=excluded.created_at`,
     )
     .run(row);
 

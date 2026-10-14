@@ -1,5 +1,6 @@
 import { db, type PriceRow } from "./db";
 import { isTwMarketOpen, taipeiDate } from "./time";
+import { sinopacStale, syncSinopac } from "./tw-futures";
 
 const FINMIND = "https://api.finmindtrade.com/api/v4";
 const COINGECKO = "https://api.coingecko.com/api/v3";
@@ -194,11 +195,21 @@ async function doRefresh(force: boolean): Promise<RefreshResult> {
       .then((qs) => void quotes.push(...qs))
       .catch((e) => void errors.push(`匯率: ${(e as Error).message}`)),
   ];
+  // SinoPac futures equity rides along: it is stored on its own rows, not as a quote.
+  let synced = 0;
+  if (force || sinopacStale()) {
+    tasks.push(
+      syncSinopac().then((r) => {
+        synced = r.synced;
+        if (r.error) errors.push(r.error);
+      }),
+    );
+  }
   await Promise.all(tasks);
 
   if (quotes.length) saveQuotes(quotes);
   if (errors.length) console.warn("[prices] refresh errors:", errors);
-  return { updated: quotes.length, errors };
+  return { updated: quotes.length + synced, errors };
 }
 
 // ---------- lookups used when adding holdings ----------

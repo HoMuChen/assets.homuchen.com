@@ -7,16 +7,18 @@ import {
   type PriceRow,
   type Property,
   type StockHolding,
+  type TwFuturesAccount,
 } from "./db";
 import { mortgageStatus, type MortgageStatus } from "./mortgage";
 import { getPriceMap, USDT_COIN_ID } from "./prices";
 
-export type Category = "cash" | "stocks" | "crypto" | "realEstate";
+export type Category = "cash" | "stocks" | "crypto" | "twFutures" | "realEstate";
 
 export const CATEGORY_LABEL: Record<Category, string> = {
   cash: "現金",
   stocks: "股票",
   crypto: "加密貨幣",
+  twFutures: "期貨",
   realEstate: "房地產",
 };
 
@@ -63,6 +65,8 @@ export type CoinExposure = {
   netQty: number;
   netValueTwd: number;
 };
+/** Taiwan futures account, valued at 權益數 (cash balance + open P&L), like the crypto futures accounts. */
+export type TwFuturesPosition = TwFuturesAccount & { position: Position };
 export type PropertyPosition = Property & {
   marketValue: number;
   equity: number;
@@ -77,6 +81,7 @@ export type Portfolio = {
   exposure: CoinExposure[];
   /** TWD per 1 USDT. */
   usdtTwd: number | null;
+  twFutures: TwFuturesPosition[];
   properties: PropertyPosition[];
   totals: {
     cash: number;
@@ -85,6 +90,8 @@ export type Portfolio = {
     crypto: number;
     cryptoSpot: number;
     cryptoFutures: number;
+    /** Equity of Taiwan futures accounts. */
+    twFutures: number;
     /** Market value of properties (gross). */
     realEstate: number;
     realEstateEquity: number;
@@ -237,6 +244,23 @@ export function getPortfolio(): Portfolio {
     })
     .sort((a, b) => Math.abs(b.netValueTwd) - Math.abs(a.netValueTwd));
 
+  const twFutures = (conn.prepare("SELECT * FROM tw_futures_accounts ORDER BY equity DESC").all() as TwFuturesAccount[]).map(
+    (a) => ({
+      ...a,
+      position: {
+        category: "twFutures" as const,
+        key: `twfut:${a.id}`,
+        name: a.name,
+        detail: [a.broker, a.source === "sinopac" ? "API 同步" : "手動"].filter(Boolean).join(" · "),
+        valueTwd: a.equity,
+        costTwd: null,
+        dayChangeTwd: null,
+        dayChangePct: null,
+        price: null,
+      },
+    }),
+  );
+
   const properties = (conn.prepare("SELECT * FROM properties ORDER BY id").all() as Property[]).map((p) => {
     const mortgage = mortgageStatus(p);
     // Without an appraisal, value the property at cost (down payment + loan).
@@ -250,11 +274,12 @@ export function getPortfolio(): Portfolio {
     stocks: sum(stocks.map((s) => s.position.valueTwd)),
     cryptoSpot: sum(crypto.map((c) => c.position.valueTwd)),
     cryptoFutures: sum(futures.map((f) => f.position.valueTwd)),
+    twFutures: sum(twFutures.map((f) => f.equity)),
     realEstate: sum(properties.map((p) => p.marketValue)),
     mortgage: sum(properties.map((p) => p.mortgage.balance)),
   };
   const cryptoTotal = t.cryptoSpot + t.cryptoFutures;
-  const totalAssets = t.cash + t.stocks + cryptoTotal + t.realEstate;
+  const totalAssets = t.cash + t.stocks + cryptoTotal + t.twFutures + t.realEstate;
   const totalLiabilities = t.mortgage;
 
   const fetched = [...prices.values()].map((p) => p.fetched_at).sort();
@@ -266,6 +291,7 @@ export function getPortfolio(): Portfolio {
     futures,
     exposure,
     usdtTwd,
+    twFutures,
     properties,
     totals: {
       ...t,

@@ -24,6 +24,9 @@ export const IconStock = (p: SVGProps<SVGSVGElement>) => (
 export const IconCrypto = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base(p)}><circle cx="8" cy="8" r="6.25" /><path d="M6.5 5h2.25a1.5 1.5 0 010 3H6.5h2.75a1.5 1.5 0 010 3H6.5V5zM7.5 4v1M7.5 11v1" /></svg>
 );
+export const IconFutures = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}><path d="M2.5 13.5h11" /><path d="M4.5 11V7.5M8 11V4.5M11.5 11V6" /><path d="M3.5 7.5h2M7 4.5h2M10.5 6h2" /></svg>
+);
 export const IconHouse = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base(p)}><path d="M2.5 7L8 2.5 13.5 7v6.5h-11V7z" /><path d="M6.5 13.5V10h3v3.5" /></svg>
 );

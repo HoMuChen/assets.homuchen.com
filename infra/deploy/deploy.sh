@@ -7,6 +7,7 @@
 #
 # ASSETS_HOME (default /opt/assets):
 #   .env            app settings and secrets (chmod 600)
+#   sinopac.env     SJ_API_KEY / SJ_SEC_KEY for the SinoPac sidecar only (chmod 600)
 #   data/           SQLite database, mounted into the container at /data
 #   app/            compose.prod.yml, extracted from the image on every deploy
 #   state/current   running image (repo@sha256:...); state/previous is the last good one
@@ -34,6 +35,9 @@ compose() {
 mkdir -p "$APP_DIR" "$STATE_DIR" "$ASSETS_HOME/data"
 touch "$STATE_DIR/failed"
 ln -sfn ../.env "$APP_DIR/.env"
+# SinoPac sidecar keys; an empty file just leaves SinoPac sync unconfigured
+[ -f "$ASSETS_HOME/sinopac.env" ] || install -m 0600 /dev/null "$ASSETS_HOME/sinopac.env"
+ln -sfn ../sinopac.env "$APP_DIR/sinopac.env"
 
 # One deploy at a time (webhook and timer can fire together)
 LOCK=$STATE_DIR/deploy.lock

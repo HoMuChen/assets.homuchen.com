@@ -76,6 +76,28 @@ CREATE TABLE IF NOT EXISTS futures_positions (
   updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Taiwan (TAIFEX) futures accounts, valued at 權益數 (equity, TWD).
+-- source 'manual': equity typed in by hand. 'sinopac': synced from the Shioaji sidecar (src/lib/tw-futures.ts);
+-- account_ref pins the SinoPac futures account id once the first sync has seen it.
+CREATE TABLE IF NOT EXISTS tw_futures_accounts (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  name               TEXT NOT NULL,
+  broker             TEXT,
+  source             TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'sinopac')),
+  account_ref        TEXT,
+  equity             REAL NOT NULL DEFAULT 0,
+  open_pnl           REAL,
+  available_margin   REAL,
+  initial_margin     REAL,
+  maintenance_margin REAL,
+  risk_indicator     REAL,
+  margin_call        REAL,
+  synced_at          TEXT,
+  sync_error         TEXT,
+  note               TEXT,
+  updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Latest quote cache. key: 'tw:2330' | 'crypto:bitcoin' (TWD) | 'crypto_usd:bitcoin' (USD) | 'fx:USD' (TWD per 1 unit)
 CREATE TABLE IF NOT EXISTS prices (
   key        TEXT PRIMARY KEY,
@@ -119,11 +141,24 @@ CREATE TABLE IF NOT EXISTS snapshots (
   stocks            REAL NOT NULL,
   crypto            REAL NOT NULL,
   real_estate       REAL NOT NULL,
+  tw_futures        REAL NOT NULL DEFAULT 0,
   mortgage          REAL NOT NULL,
   detail            TEXT NOT NULL,
   created_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 `;
+
+/** Columns added after a table first shipped; CREATE TABLE IF NOT EXISTS won't add them to an existing db. */
+const ADDED_COLUMNS: { table: string; column: string; ddl: string }[] = [
+  { table: "snapshots", column: "tw_futures", ddl: "REAL NOT NULL DEFAULT 0" },
+];
+
+function migrate(conn: Database.Database) {
+  for (const { table, column, ddl } of ADDED_COLUMNS) {
+    const cols = conn.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === column)) conn.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+  }
+}
 
 const globalForDb = globalThis as unknown as { __assetsDb?: Database.Database };
 
@@ -135,6 +170,7 @@ export function db(): Database.Database {
     conn.pragma("busy_timeout = 5000");
     conn.pragma("foreign_keys = ON");
     conn.exec(SCHEMA);
+    migrate(conn);
     globalForDb.__assetsDb = conn;
   }
   return globalForDb.__assetsDb;
@@ -204,6 +240,25 @@ export type FuturesPosition = {
   note: string | null;
 };
 
+export type TwFuturesAccount = {
+  id: number;
+  name: string;
+  broker: string | null;
+  source: "manual" | "sinopac";
+  account_ref: string | null;
+  equity: number;
+  open_pnl: number | null;
+  available_margin: number | null;
+  initial_margin: number | null;
+  maintenance_margin: number | null;
+  risk_indicator: number | null;
+  margin_call: number | null;
+  synced_at: string | null;
+  sync_error: string | null;
+  note: string | null;
+  updated_at: string;
+};
+
 export type PriceRow = {
   key: string;
   price: number;
@@ -222,6 +277,7 @@ export type SnapshotRow = {
   stocks: number;
   crypto: number;
   real_estate: number;
+  tw_futures: number;
   mortgage: number;
   detail: string;
   created_at: string;
