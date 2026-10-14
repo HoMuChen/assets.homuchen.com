@@ -3,6 +3,7 @@ import { isTwMarketOpen, taipeiDate } from "./time";
 
 const FINMIND = "https://api.finmindtrade.com/api/v4";
 const COINGECKO = "https://api.coingecko.com/api/v3";
+export const USDT_COIN_ID = "tether";
 
 // How long a cached quote counts as fresh before an opportunistic refresh re-fetches it.
 const TTL_MS = {
@@ -73,21 +74,24 @@ async function fetchTwStock(symbol: string): Promise<Quote | null> {
   return twDailyClose(symbol);
 }
 
+/** Saves both a TWD quote (spot valuation) and a USD quote (futures PnL in USDT). */
 async function fetchCrypto(coinIds: string[]): Promise<Quote[]> {
   if (coinIds.length === 0) return [];
-  const r = await getJson<Record<string, { twd?: number; twd_24h_change?: number; last_updated_at?: number }>>(
-    `${COINGECKO}/simple/price?ids=${coinIds.map(encodeURIComponent).join(",")}&vs_currencies=twd&include_24hr_change=true&include_last_updated_at=true`,
+  const r = await getJson<
+    Record<string, { twd?: number; usd?: number; twd_24h_change?: number; usd_24h_change?: number; last_updated_at?: number }>
+  >(
+    `${COINGECKO}/simple/price?ids=${coinIds.map(encodeURIComponent).join(",")}&vs_currencies=twd,usd&include_24hr_change=true&include_last_updated_at=true`,
     coingeckoHeaders(),
   );
-  return Object.entries(r)
-    .filter(([, v]) => typeof v.twd === "number")
-    .map(([id, v]) => ({
-      key: `crypto:${id}`,
-      price: v.twd!,
-      changePct: v.twd_24h_change ?? null,
-      source: "coingecko",
-      asOf: v.last_updated_at ? new Date(v.last_updated_at * 1000).toISOString() : null,
-    }));
+  return Object.entries(r).flatMap(([id, v]) => {
+    const asOf = v.last_updated_at ? new Date(v.last_updated_at * 1000).toISOString() : null;
+    const out: Quote[] = [];
+    if (typeof v.twd === "number")
+      out.push({ key: `crypto:${id}`, price: v.twd, changePct: v.twd_24h_change ?? null, source: "coingecko", asOf });
+    if (typeof v.usd === "number")
+      out.push({ key: `crypto_usd:${id}`, price: v.usd, changePct: v.usd_24h_change ?? null, source: "coingecko", asOf });
+    return out;
+  });
 }
 
 /** TWD per one unit of each currency. */
@@ -154,9 +158,19 @@ async function doRefresh(force: boolean): Promise<RefreshResult> {
   const symbols = (conn.prepare("SELECT DISTINCT symbol FROM stock_holdings").all() as { symbol: string }[])
     .map((r) => r.symbol)
     .filter((s) => force || isStale(cached.get(`tw:${s}`), stockTtl));
-  const coins = (conn.prepare("SELECT DISTINCT coin_id FROM crypto_holdings").all() as { coin_id: string }[])
-    .map((r) => r.coin_id)
-    .filter((c) => force || isStale(cached.get(`crypto:${c}`), TTL_MS.crypto));
+  const hasFutures = !!conn.prepare("SELECT 1 FROM futures_accounts LIMIT 1").get();
+  const coinIds = new Set(
+    (
+      conn
+        .prepare("SELECT coin_id FROM crypto_holdings UNION SELECT coin_id FROM futures_positions")
+        .all() as { coin_id: string }[]
+    ).map((r) => r.coin_id),
+  );
+  // USDT's TWD price converts futures equity into TWD.
+  if (hasFutures) coinIds.add(USDT_COIN_ID);
+  const coins = [...coinIds].filter(
+    (c) => force || isStale(cached.get(`crypto:${c}`), TTL_MS.crypto) || !cached.has(`crypto_usd:${c}`),
+  );
   const currencies = (conn.prepare("SELECT DISTINCT currency FROM cash_accounts").all() as { currency: string }[])
     .map((r) => r.currency)
     .filter((c) => c !== "TWD" && (force || isStale(cached.get(`fx:${c}`), TTL_MS.fx)));

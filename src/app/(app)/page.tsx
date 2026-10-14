@@ -27,7 +27,7 @@ export default function OverviewPage() {
   const positive = CATEGORY_ORDER.reduce((a, c) => a + Math.max(0, parts[c]), 0);
   const share = (c: Category) => (positive > 0 ? (Math.max(0, parts[c]) / positive) * 100 : 0);
 
-  const positions = [...p.stocks, ...p.crypto, ...p.cash]
+  const positions = [...p.stocks, ...p.crypto, ...p.futures, ...p.cash]
     .map((x) => x.position)
     .sort((a, b) => b.valueTwd - a.valueTwd)
     .slice(0, 10);
@@ -38,7 +38,7 @@ export default function OverviewPage() {
     { date: today, netWorth: t.netWorth, stocks: t.stocks, crypto: t.crypto, cash: t.cash, realEstateEquity: t.realEstateEquity },
   ];
 
-  const isEmpty = p.cash.length + p.stocks.length + p.crypto.length + p.properties.length === 0;
+  const isEmpty = p.cash.length + p.stocks.length + p.crypto.length + p.futures.length + p.properties.length === 0;
 
   return (
     <>

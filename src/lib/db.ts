@@ -53,7 +53,30 @@ CREATE TABLE IF NOT EXISTS properties (
   updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Latest quote cache. key: 'tw:2330' | 'crypto:bitcoin' | 'fx:USD' (TWD per 1 unit)
+-- USDT-margined perpetual/futures. Equity = wallet_balance + Σ unrealized PnL.
+CREATE TABLE IF NOT EXISTS futures_accounts (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  name           TEXT NOT NULL,
+  wallet_balance REAL NOT NULL DEFAULT 0,
+  note           TEXT,
+  updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS futures_positions (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id  INTEGER NOT NULL REFERENCES futures_accounts(id) ON DELETE CASCADE,
+  coin_id     TEXT NOT NULL,
+  symbol      TEXT NOT NULL,
+  name        TEXT,
+  side        TEXT NOT NULL CHECK (side IN ('long', 'short')),
+  quantity    REAL NOT NULL,
+  entry_price REAL NOT NULL,
+  leverage    REAL,
+  note        TEXT,
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Latest quote cache. key: 'tw:2330' | 'crypto:bitcoin' (TWD) | 'crypto_usd:bitcoin' (USD) | 'fx:USD' (TWD per 1 unit)
 CREATE TABLE IF NOT EXISTS prices (
   key        TEXT PRIMARY KEY,
   price      REAL NOT NULL,
@@ -87,6 +110,7 @@ export function db(): Database.Database {
     const conn = new Database(path.join(DATA_DIR, "assets.db"));
     conn.pragma("journal_mode = WAL");
     conn.pragma("busy_timeout = 5000");
+    conn.pragma("foreign_keys = ON");
     conn.exec(SCHEMA);
     globalForDb.__assetsDb = conn;
   }
@@ -134,6 +158,26 @@ export type Property = {
   grace_months: number;
   loan_start_date: string | null;
   balance_override: number | null;
+  note: string | null;
+};
+
+export type FuturesAccount = {
+  id: number;
+  name: string;
+  wallet_balance: number;
+  note: string | null;
+};
+
+export type FuturesPosition = {
+  id: number;
+  account_id: number;
+  coin_id: string;
+  symbol: string;
+  name: string | null;
+  side: "long" | "short";
+  quantity: number;
+  entry_price: number;
+  leverage: number | null;
   note: string | null;
 };
 

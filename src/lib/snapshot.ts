@@ -21,6 +21,22 @@ export async function takeSnapshot(): Promise<SnapshotRow> {
       valueTwd,
       ...("quantity" in rest ? { quantity: rest.quantity, price: rest.price } : {}),
     })),
+    futures: p.futures.map((a) => ({
+      id: a.id,
+      name: a.name,
+      walletUsdt: a.wallet_balance,
+      equityUsdt: a.equityUsdt,
+      equityTwd: a.position.valueTwd,
+      positions: a.positions.map((fp) => ({
+        symbol: fp.symbol,
+        side: fp.side,
+        quantity: fp.quantity,
+        entry: fp.entry_price,
+        mark: fp.markUsdt,
+        upnlUsdt: fp.upnlUsdt,
+      })),
+    })),
+    usdtTwd: p.usdtTwd,
     properties: p.properties.map((x) => ({
       id: x.id,
       name: x.name,

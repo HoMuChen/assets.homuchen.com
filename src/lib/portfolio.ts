@@ -1,6 +1,15 @@
-import { db, type CashAccount, type CryptoHolding, type PriceRow, type Property, type StockHolding } from "./db";
+import {
+  db,
+  type CashAccount,
+  type CryptoHolding,
+  type FuturesAccount,
+  type FuturesPosition,
+  type PriceRow,
+  type Property,
+  type StockHolding,
+} from "./db";
 import { mortgageStatus, type MortgageStatus } from "./mortgage";
-import { getPriceMap } from "./prices";
+import { getPriceMap, USDT_COIN_ID } from "./prices";
 
 export type Category = "cash" | "stocks" | "crypto" | "realEstate";
 
@@ -27,6 +36,33 @@ export type Position = {
 export type StockPosition = StockHolding & { position: Position };
 export type CryptoPosition = CryptoHolding & { position: Position };
 export type CashPosition = CashAccount & { position: Position; fxRate: number | null };
+export type FuturesPositionView = FuturesPosition & {
+  /** Mark price in USDT (CoinGecko USD price ÷ USDT's USD price). */
+  markUsdt: number | null;
+  notionalUsdt: number;
+  upnlUsdt: number;
+  /** Unrealized PnL as % of initial margin when leverage is known, else % price move in the position's favour. */
+  returnPct: number | null;
+  dayChangeUsdt: number | null;
+};
+export type FuturesAccountView = FuturesAccount & {
+  positions: FuturesPositionView[];
+  upnlUsdt: number;
+  equityUsdt: number;
+  notionalUsdt: number;
+  /** Σ notional ÷ equity — the account's real leverage, regardless of the per-position setting. */
+  effectiveLeverage: number | null;
+  position: Position;
+};
+/** Spot + futures combined, per coin. Positive = net long. */
+export type CoinExposure = {
+  coinId: string;
+  symbol: string;
+  spotQty: number;
+  futuresQty: number;
+  netQty: number;
+  netValueTwd: number;
+};
 export type PropertyPosition = Property & {
   marketValue: number;
   equity: number;
@@ -37,11 +73,18 @@ export type Portfolio = {
   cash: CashPosition[];
   stocks: StockPosition[];
   crypto: CryptoPosition[];
+  futures: FuturesAccountView[];
+  exposure: CoinExposure[];
+  /** TWD per 1 USDT. */
+  usdtTwd: number | null;
   properties: PropertyPosition[];
   totals: {
     cash: number;
     stocks: number;
+    /** Spot holdings + futures account equity. */
     crypto: number;
+    cryptoSpot: number;
+    cryptoFutures: number;
     /** Market value of properties (gross). */
     realEstate: number;
     realEstateEquity: number;
@@ -128,6 +171,72 @@ export function getPortfolio(): Portfolio {
     };
   });
 
+  const usdtTwd = prices.get(`crypto:${USDT_COIN_ID}`)?.price ?? null;
+  const usdtUsd = prices.get(`crypto_usd:${USDT_COIN_ID}`)?.price ?? 1;
+  const allFuturesPositions = conn.prepare("SELECT * FROM futures_positions ORDER BY id").all() as FuturesPosition[];
+  const futures = (conn.prepare("SELECT * FROM futures_accounts ORDER BY id").all() as FuturesAccount[]).map((a) => {
+    const positions = allFuturesPositions
+      .filter((fp) => fp.account_id === a.id)
+      .map((fp): FuturesPositionView => {
+        const q = prices.get(`crypto_usd:${fp.coin_id}`);
+        if (!q) missing.push(`${fp.symbol} 合約`);
+        const mark = q ? q.price / usdtUsd : null;
+        const dir = fp.side === "long" ? 1 : -1;
+        const upnl = mark != null ? dir * fp.quantity * (mark - fp.entry_price) : 0;
+        const priceMovePct = mark != null ? ((dir * (mark - fp.entry_price)) / fp.entry_price) * 100 : null;
+        const dayMove = mark != null && q?.change_pct != null ? mark - mark / (1 + q.change_pct / 100) : null;
+        return {
+          ...fp,
+          markUsdt: mark,
+          notionalUsdt: (mark ?? fp.entry_price) * fp.quantity,
+          upnlUsdt: upnl,
+          returnPct: priceMovePct == null ? null : priceMovePct * (fp.leverage ?? 1),
+          dayChangeUsdt: dayMove == null ? null : dir * fp.quantity * dayMove,
+        };
+      });
+    const upnlUsdt = positions.reduce((x, fp) => x + fp.upnlUsdt, 0);
+    const notionalUsdt = positions.reduce((x, fp) => x + fp.notionalUsdt, 0);
+    const equityUsdt = a.wallet_balance + upnlUsdt;
+    if (usdtTwd == null) missing.push(`${a.name} (USDT 匯率)`);
+    const rate = usdtTwd ?? 0;
+    const dayUsdt = positions.reduce((x, fp) => x + (fp.dayChangeUsdt ?? 0), 0);
+    return {
+      ...a,
+      positions,
+      upnlUsdt,
+      equityUsdt,
+      notionalUsdt,
+      effectiveLeverage: equityUsdt > 0 ? notionalUsdt / equityUsdt : null,
+      position: {
+        category: "crypto" as const,
+        key: `futures:${a.id}`,
+        name: a.name,
+        detail: `合約 · ${positions.length} 個部位`,
+        valueTwd: equityUsdt * rate,
+        costTwd: null,
+        dayChangeTwd: positions.length ? dayUsdt * rate : null,
+        dayChangePct: equityUsdt - dayUsdt > 0 && positions.length ? (dayUsdt / (equityUsdt - dayUsdt)) * 100 : null,
+        price: null,
+      },
+    };
+  });
+
+  const exposureMap = new Map<string, CoinExposure>();
+  const bump = (coinId: string, symbol: string, spot: number, fut: number) => {
+    const e = exposureMap.get(coinId) ?? { coinId, symbol: symbol.toUpperCase(), spotQty: 0, futuresQty: 0, netQty: 0, netValueTwd: 0 };
+    e.spotQty += spot;
+    e.futuresQty += fut;
+    exposureMap.set(coinId, e);
+  };
+  crypto.forEach((h) => bump(h.coin_id, h.symbol, h.amount, 0));
+  allFuturesPositions.forEach((fp) => bump(fp.coin_id, fp.symbol, 0, (fp.side === "long" ? 1 : -1) * fp.quantity));
+  const exposure = [...exposureMap.values()]
+    .map((e) => {
+      const netQty = e.spotQty + e.futuresQty;
+      return { ...e, netQty, netValueTwd: netQty * (prices.get(`crypto:${e.coinId}`)?.price ?? 0) };
+    })
+    .sort((a, b) => Math.abs(b.netValueTwd) - Math.abs(a.netValueTwd));
+
   const properties = (conn.prepare("SELECT * FROM properties ORDER BY id").all() as Property[]).map((p) => {
     const mortgage = mortgageStatus(p);
     // Without an appraisal, value the property at cost (down payment + loan).
@@ -139,11 +248,13 @@ export function getPortfolio(): Portfolio {
   const t = {
     cash: sum(cash.map((c) => c.position.valueTwd)),
     stocks: sum(stocks.map((s) => s.position.valueTwd)),
-    crypto: sum(crypto.map((c) => c.position.valueTwd)),
+    cryptoSpot: sum(crypto.map((c) => c.position.valueTwd)),
+    cryptoFutures: sum(futures.map((f) => f.position.valueTwd)),
     realEstate: sum(properties.map((p) => p.marketValue)),
     mortgage: sum(properties.map((p) => p.mortgage.balance)),
   };
-  const totalAssets = t.cash + t.stocks + t.crypto + t.realEstate;
+  const cryptoTotal = t.cryptoSpot + t.cryptoFutures;
+  const totalAssets = t.cash + t.stocks + cryptoTotal + t.realEstate;
   const totalLiabilities = t.mortgage;
 
   const fetched = [...prices.values()].map((p) => p.fetched_at).sort();
@@ -152,14 +263,18 @@ export function getPortfolio(): Portfolio {
     cash,
     stocks,
     crypto,
+    futures,
+    exposure,
+    usdtTwd,
     properties,
     totals: {
       ...t,
+      crypto: cryptoTotal,
       realEstateEquity: t.realEstate - t.mortgage,
       totalAssets,
       totalLiabilities,
       netWorth: totalAssets - totalLiabilities,
-      dayChange: sum([...stocks, ...crypto].map((h) => h.position.dayChangeTwd ?? 0)),
+      dayChange: sum([...stocks, ...crypto, ...futures].map((h) => h.position.dayChangeTwd ?? 0)),
     },
     missingPrices: missing,
     lastPriceAt: fetched[fetched.length - 1] ?? null,
