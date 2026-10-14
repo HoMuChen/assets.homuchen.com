@@ -32,15 +32,13 @@ export function fmtPct(n: number | null | undefined, signed = true): string {
   return n > 0 ? `+${s}` : n < 0 ? `-${s}` : s;
 }
 
+/**
+ * MM/DD HH:mm:ss in Asia/Taipei (UTC+8, no DST). Hand-rolled so server and browser
+ * render byte-identical strings — Intl output differs across ICU builds.
+ */
 export function fmtTime(iso: string | null | undefined): string {
   if (!iso) return "—";
-  return new Intl.DateTimeFormat("zh-TW", {
-    timeZone: "Asia/Taipei",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  }).format(new Date(iso));
+  const d = new Date(new Date(iso).getTime() + 8 * 3_600_000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getUTCMonth() + 1)}/${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
 }

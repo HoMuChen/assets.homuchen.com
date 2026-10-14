@@ -57,7 +57,7 @@ export default function RealEstatePage() {
                       <Row label="市值">{fmtTwd(x.marketValue)}</Row>
                       <Row label="房貸剩餘">{fmtTwd(m.balance)}</Row>
                       <Row label="淨值">{fmtTwd(x.equity)}</Row>
-                      <Row label="淨值 − 投入現金">
+                      <Row label="累計增值">
                         <Delta value={gain} pct={x.cash_invested ? (gain / x.cash_invested) * 100 : null} />
                       </Row>
                     </div>

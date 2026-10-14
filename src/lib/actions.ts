@@ -37,9 +37,30 @@ function fields(fd: FormData) {
   return Object.fromEntries([...fd.entries()].filter(([, v]) => typeof v === "string"));
 }
 
+const FIELD_LABEL: Record<string, string> = {
+  name: "名稱",
+  currency: "幣別",
+  balance: "餘額",
+  symbol: "股票代號",
+  shares: "股數",
+  avg_cost: "平均成本",
+  coin: "幣種",
+  amount: "數量",
+  avg_cost_twd: "平均成本",
+  cash_invested: "投入現金",
+  estimated_value: "估計市值",
+  loan_amount: "貸款金額",
+  annual_rate: "年利率",
+  term_years: "貸款年限",
+  grace_months: "寬限期",
+  loan_start_date: "撥款日",
+  balance_override: "剩餘本金",
+};
+
 function firstError(e: z.ZodError): string {
   const issue = e.issues[0];
-  return `${issue.path.join(".")}: ${issue.message}`;
+  const field = String(issue.path[0] ?? "");
+  return `${FIELD_LABEL[field] ?? field}：${issue.message}`;
 }
 
 function done() {
