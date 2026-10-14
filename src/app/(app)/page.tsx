@@ -32,6 +32,12 @@ export default function OverviewPage() {
     .sort((a, b) => b.valueTwd - a.valueTwd)
     .slice(0, 10);
 
+  // Chart ends at the live number shown in the hero, not at today's (possibly stale) snapshot.
+  const trend = [
+    ...toTrend(snapshots.filter((s) => s.date < today)),
+    { date: today, netWorth: t.netWorth, stocks: t.stocks, crypto: t.crypto, cash: t.cash, realEstateEquity: t.realEstateEquity },
+  ];
+
   const isEmpty = p.cash.length + p.stocks.length + p.crypto.length + p.properties.length === 0;
 
   return (
@@ -84,7 +90,7 @@ export default function OverviewPage() {
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <Card className="lg:col-span-2">
-            <NetWorthChart data={toTrend(snapshots)} title="淨資產走勢" />
+            <NetWorthChart data={trend} title="淨資產走勢" />
           </Card>
 
           {/* Allocation */}
