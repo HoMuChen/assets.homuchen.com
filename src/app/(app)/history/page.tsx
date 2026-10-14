@@ -1,4 +1,4 @@
-import { CompositionChart } from "@/components/charts";
+import { HistoryChart } from "@/components/charts";
 import { SnapshotButton } from "@/components/snapshot-button";
 import { Card, CardHeader, Delta, Empty, PageHeader, td, th, tr } from "@/components/ui";
 import { fmtTwd } from "@/lib/format";
@@ -16,7 +16,7 @@ export default function HistoryPage() {
       </PageHeader>
       <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-4 px-4 py-6 md:px-6">
         <Card>
-          <CompositionChart data={toTrend(snapshots)} />
+          <HistoryChart data={toTrend(snapshots)} />
         </Card>
 
         <Card className="overflow-hidden">
