@@ -3,10 +3,19 @@ import { isValidSession, SESSION_COOKIE } from "./session";
 
 export { authEnabled } from "./session";
 
+export async function isAuthenticated(): Promise<boolean> {
+  const jar = await cookies();
+  return isValidSession(jar.get(SESSION_COOKIE)?.value);
+}
+
 /** Call at the top of every Server Function; proxy coverage alone is not enough. */
 export async function requireAuth() {
-  const jar = await cookies();
-  if (!isValidSession(jar.get(SESSION_COOKIE)?.value)) throw new Error("Unauthorized");
+  if (!(await isAuthenticated())) throw new Error("Unauthorized");
+}
+
+/** Route Handler counterpart of requireAuth: a 401 response to return, or null when signed in. */
+export async function unauthorizedResponse(): Promise<Response | null> {
+  return (await isAuthenticated()) ? null : Response.json({ error: "unauthorized" }, { status: 401 });
 }
 
 /**
