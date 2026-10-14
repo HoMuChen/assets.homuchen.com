@@ -47,3 +47,6 @@ next-env.d.ts
 # SinoPac sidecar (local runs)
 shioaji.log
 __pycache__/
+
+# private screenshots (real numbers)
+mobile.png
