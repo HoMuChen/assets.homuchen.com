@@ -25,7 +25,7 @@ gh workflow run Deploy [-f sha=xxxxxxx]
 ```
 
 `assets-deploy.timer` 每 10 分鐘補檢查一次 `:prod`；`assets-backup.timer` 每天 03:30（台北）把 SQLite
-備份到 R2 的 `hq-backup/assets/`（與 HQ 共用 bucket，HQ 只清 `db/`），保留最近 14 份＋近 12 個月每月一份。
+備份到 R2 的 `backup/assets/`（各服務共用的 `backup` bucket，一個服務一個資料夾，HQ 在 `headquarter/`），保留最近 14 份＋近 12 個月每月一份。
 
 | VM 上的路徑 | 內容 |
 | --- | --- |

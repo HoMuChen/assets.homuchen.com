@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Daily SQLite backup (assets-backup.timer): online .backup → integrity_check → gzip → R2, then prune.
-# Shares HQ's backup bucket under its own prefix; HQ's pruning only touches db/, this one only assets/.
+# The `backup` bucket is shared by every service on the VM, one folder each; this script only touches assets/.
 #
 # Settings come from /opt/assets/backup.env (chmod 600), kept apart from the app's .env so the
 # container never sees the R2 keys:
