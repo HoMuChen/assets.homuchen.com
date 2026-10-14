@@ -3,7 +3,7 @@ import { fmtPct, fmtTwd } from "@/lib/format";
 
 export function PageHeader({ title, children }: { title: string; children?: ReactNode }) {
   return (
-    <header className="sticky top-0 z-10 flex h-12 shrink-0 items-center justify-between gap-3 border-b border-line bg-bg/80 px-4 backdrop-blur md:px-6">
+    <header className="sticky top-0 z-10 flex h-[calc(3rem+env(safe-area-inset-top))] shrink-0 items-center justify-between gap-3 border-b border-line bg-bg/80 px-4 pt-[env(safe-area-inset-top)] backdrop-blur md:px-6">
       <h1 className="text-[13px] font-medium text-fg">{title}</h1>
       <div className="flex items-center gap-2">{children}</div>
     </header>
