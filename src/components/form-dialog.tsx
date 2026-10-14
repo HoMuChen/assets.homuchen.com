@@ -29,14 +29,17 @@ export function FormDialog({
   action,
   children,
   trigger = "add",
+  triggerLabel,
   deleteKind,
   deleteId,
 }: {
   title: string;
   action: Action;
   children: ReactNode;
-  trigger?: "add" | "edit";
-  deleteKind?: "cash" | "stock" | "crypto" | "property";
+  /** add = primary button, addSubtle = secondary button, edit = text link */
+  trigger?: "add" | "addSubtle" | "edit";
+  triggerLabel?: string;
+  deleteKind?: Parameters<typeof deleteItem>[0];
   deleteId?: number;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -45,6 +48,8 @@ export function FormDialog({
   const [state, formAction, pending] = useActionState(action, null);
   const [deleting, startDelete] = useTransition();
   const [openKey, setOpenKey] = useState(0);
+  // Only show an error for a submission made in the currently open dialog.
+  const [submittedKey, setSubmittedKey] = useState(-1);
 
   useEffect(() => {
     if (state?.ok) {
@@ -67,11 +72,20 @@ export function FormDialog({
           className="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-accent-hover"
         >
           <IconPlus width={14} height={14} />
-          新增
+          {triggerLabel ?? "新增"}
+        </button>
+      ) : trigger === "addSubtle" ? (
+        <button
+          type="button"
+          onClick={open}
+          className="inline-flex h-6 items-center gap-1 rounded-md border border-line-strong px-2 text-[12px] text-fg-2 transition-colors hover:bg-hover"
+        >
+          <IconPlus width={12} height={12} />
+          {triggerLabel ?? "新增"}
         </button>
       ) : (
         <button type="button" onClick={open} className="rounded px-2 py-1 text-[12px] text-fg-3 hover:bg-hover hover:text-fg">
-          編輯
+          {triggerLabel ?? "編輯"}
         </button>
       )}
 
@@ -80,12 +94,12 @@ export function FormDialog({
         className="m-auto w-[min(560px,calc(100vw-32px))] rounded-xl border border-line-strong bg-panel p-0 shadow-2xl"
         onClick={(e) => e.target === ref.current && ref.current?.close()}
       >
-        <form key={openKey} ref={formRef} action={formAction}>
+        <form key={openKey} ref={formRef} action={formAction} onSubmit={() => setSubmittedKey(openKey)}>
           <div className="flex h-11 items-center border-b border-line px-5">
             <h3 className="text-[13px] font-medium">{title}</h3>
           </div>
           <div className="grid grid-cols-1 gap-4 px-5 py-5 sm:grid-cols-2">{children}</div>
-          {state && !state.ok && openKey > 0 && (
+          {state && !state.ok && submittedKey === openKey && (
             <p className="mx-5 mb-3 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">{state.error}</p>
           )}
           <div className="flex items-center gap-2 border-t border-line px-5 py-3">

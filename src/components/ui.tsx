@@ -29,11 +29,14 @@ export function Delta({
   pct,
   className = "",
   showValue = true,
+  format = fmtTwd,
 }: {
   value?: number | null;
   pct?: number | null;
   className?: string;
   showValue?: boolean;
+  /** Formats the absolute value; defaults to TWD. */
+  format?: (n: number) => string;
 }) {
   const basis = value ?? pct;
   if (basis == null || !Number.isFinite(basis)) return <span className={`text-fg-4 ${className}`}>—</span>;
@@ -43,7 +46,7 @@ export function Delta({
   return (
     <span className={`num inline-flex items-center gap-1 whitespace-nowrap ${color} ${className}`}>
       {arrow && <span className="text-[0.7em]">{arrow}</span>}
-      {showValue && value != null && <span>{fmtTwd(Math.abs(value))}</span>}
+      {showValue && value != null && <span>{format(Math.abs(value))}</span>}
       {pct != null && <span className={showValue && value != null ? "opacity-80" : ""}>{showValue && value != null ? `(${fmtPct(pct)})` : fmtPct(pct)}</span>}
     </span>
   );

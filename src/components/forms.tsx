@@ -1,7 +1,7 @@
 "use client";
 
-import { saveCash, saveCrypto, saveProperty, saveStock } from "@/lib/actions";
-import type { CashAccount, CryptoHolding, Property, StockHolding } from "@/lib/db";
+import { saveCash, saveCrypto, saveFuturesAccount, saveFuturesPosition, saveProperty, saveStock } from "@/lib/actions";
+import type { CashAccount, CryptoHolding, FuturesAccount, FuturesPosition, Property, StockHolding } from "@/lib/db";
 import { Field, FormDialog, inputCls } from "./form-dialog";
 
 const v = (x: unknown) => (x == null ? "" : String(x));
@@ -54,7 +54,14 @@ export function StockForm({ item }: { item?: StockHolding }) {
 
 export function CryptoForm({ item }: { item?: CryptoHolding }) {
   return (
-    <FormDialog title={item ? `編輯 ${item.symbol}` : "新增加密貨幣"} action={saveCrypto} trigger={item ? "edit" : "add"} deleteKind="crypto" deleteId={item?.id}>
+    <FormDialog
+      title={item ? `編輯 ${item.symbol}` : "新增現貨"}
+      action={saveCrypto}
+      trigger={item ? "edit" : "addSubtle"}
+      triggerLabel={item ? undefined : "新增現貨"}
+      deleteKind="crypto"
+      deleteId={item?.id}
+    >
       <input type="hidden" name="id" value={v(item?.id)} />
       <Field label="幣種" hint="輸入代號（BTC）或 CoinGecko id（bitcoin）">
         <input name="coin" required defaultValue={v(item?.coin_id)} placeholder="BTC" className={inputCls} />
@@ -69,6 +76,68 @@ export function CryptoForm({ item }: { item?: CryptoHolding }) {
         <input name="location" defaultValue={v(item?.location)} placeholder="冷錢包 / Binance" className={inputCls} />
       </Field>
       <Field label="備註" wide>
+        <input name="note" defaultValue={v(item?.note)} className={inputCls} />
+      </Field>
+    </FormDialog>
+  );
+}
+
+export function FuturesAccountForm({ item }: { item?: FuturesAccount }) {
+  return (
+    <FormDialog
+      title={item ? `編輯 ${item.name}` : "新增合約帳戶"}
+      action={saveFuturesAccount}
+      trigger={item ? "edit" : "addSubtle"}
+      triggerLabel={item ? undefined : "新增合約帳戶"}
+      deleteKind="futuresAccount"
+      deleteId={item?.id}
+    >
+      <input type="hidden" name="id" value={v(item?.id)} />
+      <Field label="帳戶名稱" wide>
+        <input name="name" required defaultValue={v(item?.name)} placeholder="Binance U 本位" className={inputCls} />
+      </Field>
+      <Field label="錢包餘額 (USDT)" hint="交易所顯示的「錢包餘額」，不含未實現損益" wide>
+        <input name="wallet_balance" required inputMode="decimal" defaultValue={v(item?.wallet_balance)} className={`${inputCls} num`} />
+      </Field>
+      <Field label="備註" wide>
+        <input name="note" defaultValue={v(item?.note)} className={inputCls} />
+      </Field>
+      {item && <p className="text-[11px] text-fg-4 sm:col-span-2">刪除帳戶會一併刪除底下所有部位。</p>}
+    </FormDialog>
+  );
+}
+
+export function FuturesPositionForm({ accountId, item }: { accountId: number; item?: FuturesPosition }) {
+  return (
+    <FormDialog
+      title={item ? `編輯 ${item.symbol} ${item.side === "long" ? "多單" : "空單"}` : "新增合約部位"}
+      action={saveFuturesPosition}
+      trigger={item ? "edit" : "addSubtle"}
+      triggerLabel={item ? undefined : "新增部位"}
+      deleteKind="futuresPosition"
+      deleteId={item?.id}
+    >
+      <input type="hidden" name="id" value={v(item?.id)} />
+      <input type="hidden" name="account_id" value={accountId} />
+      <Field label="幣種" hint="輸入代號（BTC）或 CoinGecko id">
+        <input name="coin" required defaultValue={v(item?.coin_id)} placeholder="BTC" className={inputCls} />
+      </Field>
+      <Field label="方向">
+        <select name="side" defaultValue={item?.side ?? "long"} className={inputCls}>
+          <option value="long">多 Long</option>
+          <option value="short">空 Short</option>
+        </select>
+      </Field>
+      <Field label="數量（幣）" hint="以幣計，例如 0.5 BTC">
+        <input name="quantity" required inputMode="decimal" defaultValue={v(item?.quantity)} className={`${inputCls} num`} />
+      </Field>
+      <Field label="開倉均價 (USDT)">
+        <input name="entry_price" required inputMode="decimal" defaultValue={v(item?.entry_price)} className={`${inputCls} num`} />
+      </Field>
+      <Field label="槓桿倍數" hint="選填，用來算報酬率 (ROE)">
+        <input name="leverage" inputMode="decimal" defaultValue={v(item?.leverage)} placeholder="10" className={`${inputCls} num`} />
+      </Field>
+      <Field label="備註">
         <input name="note" defaultValue={v(item?.note)} className={inputCls} />
       </Field>
     </FormDialog>

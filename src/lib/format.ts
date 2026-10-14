@@ -42,3 +42,11 @@ export function fmtTime(iso: string | null | undefined): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${p(d.getUTCMonth() + 1)}/${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
 }
+
+const usdt = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/** USDT amount without unit (column headers carry the unit). */
+export function fmtUsdt(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  return `${n < 0 ? "-" : ""}${usdt.format(Math.abs(n))}`;
+}

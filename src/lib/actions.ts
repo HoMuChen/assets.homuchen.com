@@ -56,6 +56,11 @@ const FIELD_LABEL: Record<string, string> = {
   grace_months: "寬限期",
   loan_start_date: "撥款日",
   balance_override: "剩餘本金",
+  wallet_balance: "錢包餘額",
+  side: "方向",
+  quantity: "數量",
+  entry_price: "開倉均價",
+  leverage: "槓桿",
 };
 
 function firstError(e: z.ZodError): string {
@@ -187,6 +192,70 @@ export async function saveCrypto(_: ActionState, fd: FormData): Promise<ActionSt
   });
 }
 
+// ---------- futures (USDT-margined) ----------
+
+const FuturesAccountSchema = z.object({
+  id,
+  name: z.string().trim().min(1, "必填"),
+  wallet_balance: num,
+  note: text,
+});
+
+export async function saveFuturesAccount(_: ActionState, fd: FormData): Promise<ActionState> {
+  return guarded(async () => {
+    const v = FuturesAccountSchema.parse(fields(fd));
+    if (v.id) {
+      db()
+        .prepare(
+          `UPDATE futures_accounts SET name=@name, wallet_balance=@wallet_balance, note=@note,
+           updated_at=datetime('now') WHERE id=@id`,
+        )
+        .run(v);
+    } else {
+      db().prepare(`INSERT INTO futures_accounts (name, wallet_balance, note) VALUES (@name, @wallet_balance, @note)`).run(v);
+    }
+    await refreshPrices();
+    return done();
+  });
+}
+
+const FuturesPositionSchema = z.object({
+  id,
+  account_id: z.coerce.number().int().positive(),
+  coin: z.string().trim().min(1, "必填"),
+  side: z.enum(["long", "short"], { message: "請選擇多或空" }),
+  quantity: num.refine((n) => n > 0, "必須大於 0"),
+  entry_price: num.refine((n) => n > 0, "必須大於 0"),
+  leverage: optNum.refine((n) => n == null || n >= 1, "槓桿至少 1"),
+  note: text,
+});
+
+export async function saveFuturesPosition(_: ActionState, fd: FormData): Promise<ActionState> {
+  return guarded(async () => {
+    const v = FuturesPositionSchema.parse(fields(fd));
+    const coin = await resolveCoin(v.coin);
+    if (!coin) return { ok: false, error: `CoinGecko 找不到「${v.coin}」，請改輸入 CoinGecko coin id（例如 bitcoin）` };
+    const row = { ...v, coin_id: coin.id, symbol: coin.symbol.toUpperCase(), name: coin.name };
+    if (v.id) {
+      db()
+        .prepare(
+          `UPDATE futures_positions SET coin_id=@coin_id, symbol=@symbol, name=@name, side=@side, quantity=@quantity,
+           entry_price=@entry_price, leverage=@leverage, note=@note, updated_at=datetime('now') WHERE id=@id`,
+        )
+        .run(row);
+    } else {
+      db()
+        .prepare(
+          `INSERT INTO futures_positions (account_id, coin_id, symbol, name, side, quantity, entry_price, leverage, note)
+           VALUES (@account_id, @coin_id, @symbol, @name, @side, @quantity, @entry_price, @leverage, @note)`,
+        )
+        .run(row);
+    }
+    await refreshPrices();
+    return done();
+  });
+}
+
 // ---------- real estate ----------
 
 const PropertySchema = z.object({
@@ -237,6 +306,8 @@ const TABLES = {
   stock: "stock_holdings",
   crypto: "crypto_holdings",
   property: "properties",
+  futuresAccount: "futures_accounts",
+  futuresPosition: "futures_positions",
 } as const;
 
 export async function deleteItem(kind: keyof typeof TABLES, itemId: number): Promise<ActionState> {
