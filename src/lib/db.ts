@@ -86,6 +86,29 @@ CREATE TABLE IF NOT EXISTS prices (
   fetched_at TEXT NOT NULL
 );
 
+-- Login sessions. Only a SHA-256 of the cookie token is stored.
+-- pw_fingerprint ties a session to the APP_PASSWORD it was created under.
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash     TEXT PRIMARY KEY,
+  pw_fingerprint TEXT NOT NULL,
+  created_at     INTEGER NOT NULL,
+  expires_at     INTEGER NOT NULL,
+  last_seen_at   INTEGER NOT NULL,
+  ip             TEXT,
+  user_agent     TEXT
+);
+
+-- Brute-force protection. Times are epoch milliseconds.
+CREATE TABLE IF NOT EXISTS login_failures (
+  ip TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS login_failures_at ON login_failures (at);
+CREATE TABLE IF NOT EXISTS login_locks (
+  scope TEXT PRIMARY KEY, -- 'ip:<addr>' or 'global'
+  until INTEGER NOT NULL
+);
+
 -- One row per Asia/Taipei calendar day; re-taking a snapshot the same day overwrites it.
 CREATE TABLE IF NOT EXISTS snapshots (
   date              TEXT PRIMARY KEY,

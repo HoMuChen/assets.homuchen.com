@@ -20,6 +20,13 @@ docker compose up -d --build
 
 建議放在 reverse proxy（Caddy / Nginx / Cloudflare Tunnel）後面提供 HTTPS 給 `assets.homuchen.com`。若暫時只用 HTTP 存取，請在 `.env` 設 `COOKIE_SECURE=false`，否則登入 cookie 不會被瀏覽器保存。
 
+### 登入安全
+
+- 每次登入產生一組隨機 session token（cookie 為 `httpOnly`、`sameSite=lax`），資料庫只存 SHA-256 雜湊，伺服器端 30 天到期。
+- 登出只會登出目前裝置；側邊欄的「登出所有裝置」會撤銷全部 session。修改 `APP_PASSWORD` 後重啟，所有既有 session 也會失效。
+- 防暴力破解：同一 IP 15 分鐘內錯 5 次鎖 15 分鐘；全站 15 分鐘內累計錯 20 次則暫停所有登入 15 分鐘（已登入的裝置不受影響）。鎖定期間正確密碼也會被拒。
+- 客戶端 IP 依序取自 `CF-Connecting-IP`、`X-Real-IP`、`X-Forwarded-For`，請確保 reverse proxy 會覆寫這些 header；直接對外暴露時 header 可被偽造，此時主要靠全站上限防護。
+
 ### 環境變數
 
 | 變數 | 說明 |

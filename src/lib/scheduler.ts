@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { refreshPrices } from "./prices";
+import { pruneAuthTables } from "./session";
 import { hasSnapshot, takeSnapshot } from "./snapshot";
 import { TZ, taipeiDate } from "./time";
 
@@ -17,6 +18,15 @@ export function startScheduler() {
   cron.schedule("*/5 * * * *", () => refreshPrices().catch(log("refresh")), { timezone: TZ });
   // Daily snapshot near end of day, so it captures the day's close and late crypto moves.
   cron.schedule("55 23 * * *", () => takeSnapshot().catch(log("daily snapshot")), { timezone: TZ });
+
+  // Housekeeping: expired sessions, stale login failures, finished locks.
+  cron.schedule("10 4 * * *", () => {
+    try {
+      pruneAuthTables();
+    } catch (e) {
+      log("auth prune")(e);
+    }
+  }, { timezone: TZ });
 
   // Make sure today has a snapshot even if the server was down at 23:55 yesterday.
   setTimeout(() => {

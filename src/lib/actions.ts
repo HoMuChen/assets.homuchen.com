@@ -1,11 +1,21 @@
 "use server";
 
-import { timingSafeEqual } from "node:crypto";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { requireAuth, SESSION_COOKIE, sessionToken } from "./auth";
+import { clientIp, requireAuth } from "./auth";
+import {
+  checkLoginAllowed,
+  clearLoginFailures,
+  createSession,
+  deleteAllSessions,
+  deleteSession,
+  recordLoginFailure,
+  SESSION_COOKIE,
+  SESSION_TTL_MS,
+  verifyPassword,
+} from "./session";
 import { db } from "./db";
 import { lookupTwStockName, refreshPrices, resolveCoin } from "./prices";
 import { takeSnapshot } from "./snapshot";
@@ -338,28 +348,44 @@ export async function snapshotNow(): Promise<ActionState> {
 
 // ---------- login ----------
 
+const lockedMessage = (ms: number) => `嘗試次數過多，請 ${Math.ceil(ms / 60_000)} 分鐘後再試`;
+
 export async function login(_: ActionState, fd: FormData): Promise<ActionState> {
-  const password = String(fd.get("password") ?? "");
-  const expected = process.env.APP_PASSWORD;
-  const a = Buffer.from(password);
-  const b = Buffer.from(expected ?? "");
-  if (!expected || a.length !== b.length || !timingSafeEqual(a, b)) {
+  const ip = await clientIp();
+  const gate = checkLoginAllowed(ip);
+  // While locked, even the right password is refused — otherwise the lock would be pointless.
+  if (!gate.allowed) return { ok: false, error: lockedMessage(gate.retryAfterMs) };
+
+  if (!verifyPassword(String(fd.get("password") ?? ""))) {
     await new Promise((r) => setTimeout(r, 600));
-    return { ok: false, error: "密碼錯誤" };
+    const after = recordLoginFailure(ip);
+    return { ok: false, error: after.allowed ? "密碼錯誤" : lockedMessage(after.retryAfterMs) };
   }
+
+  clearLoginFailures(ip);
+  const token = createSession({ ip, userAgent: (await headers()).get("user-agent") });
   const jar = await cookies();
-  jar.set(SESSION_COOKIE, await sessionToken(), {
+  jar.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production" && process.env.COOKIE_SECURE !== "false",
     path: "/",
-    maxAge: 60 * 60 * 24 * 30,
+    maxAge: SESSION_TTL_MS / 1000,
   });
   redirect("/");
 }
 
 export async function logout() {
   const jar = await cookies();
+  deleteSession(jar.get(SESSION_COOKIE)?.value);
   jar.delete(SESSION_COOKIE);
+  redirect("/login");
+}
+
+/** Revoke every session, including this one. */
+export async function logoutAll() {
+  await requireAuth();
+  deleteAllSessions();
+  (await cookies()).delete(SESSION_COOKIE);
   redirect("/login");
 }

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { logout } from "@/lib/actions";
+import { logout, logoutAll } from "@/lib/actions";
 import { IconCash, IconCrypto, IconHistory, IconHouse, IconLogout, IconOverview, IconStock } from "./icons";
 
 const NAV = [
@@ -44,12 +44,25 @@ export function Sidebar({ authEnabled }: { authEnabled: boolean }) {
           ))}
         </nav>
         {authEnabled && (
-          <form action={logout} className="mt-auto px-2 pb-3">
-            <button className="flex h-7 w-full items-center gap-2.5 rounded-md px-2 text-[13px] text-fg-4 hover:bg-hover hover:text-fg-2">
-              <IconLogout />
-              登出
-            </button>
-          </form>
+          <div className="mt-auto flex flex-col gap-px px-2 pb-3">
+            <form action={logout}>
+              <button className="flex h-7 w-full items-center gap-2.5 rounded-md px-2 text-[13px] text-fg-4 hover:bg-hover hover:text-fg-2">
+                <IconLogout />
+                登出
+              </button>
+            </form>
+            <form
+              action={logoutAll}
+              onSubmit={(e) => {
+                if (!confirm("確定要登出所有裝置（包含這台）嗎？")) e.preventDefault();
+              }}
+            >
+              <button className="flex h-7 w-full items-center gap-2.5 rounded-md px-2 text-[12px] text-fg-4 hover:bg-hover hover:text-fg-2">
+                <span className="w-4" />
+                登出所有裝置
+              </button>
+            </form>
+          </div>
         )}
       </aside>
 
