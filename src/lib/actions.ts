@@ -38,8 +38,10 @@ const num = z.preprocess(
   z.coerce.number({ message: "請輸入數字" }).refine(Number.isFinite, "請輸入數字"),
 );
 
+// A field missing from the form (e.g. equity when the source is the SinoPac API) counts as empty, not NaN.
 const optNum = z.preprocess(
-  (v) => (typeof v === "string" ? (v.replace(/,/g, "").trim() === "" ? null : v.replace(/,/g, "").trim()) : v),
+  (v) =>
+    v === undefined ? null : typeof v === "string" ? (v.replace(/,/g, "").trim() === "" ? null : v.replace(/,/g, "").trim()) : v,
   z.coerce.number({ message: "請輸入數字" }).nullable(),
 );
 

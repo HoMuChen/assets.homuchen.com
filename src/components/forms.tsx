@@ -146,9 +146,18 @@ export function FuturesPositionForm({ accountId, item }: { accountId: number; it
 }
 
 export function TwFuturesForm({ item, sinopacAvailable }: { item?: TwFuturesAccount; sinopacAvailable: boolean }) {
-  const [source, setSource] = useState<TwFuturesAccount["source"]>(item?.source ?? "manual");
   return (
     <FormDialog title={item ? `編輯 ${item.name}` : "新增期貨帳戶"} action={saveTwFutures} trigger={item ? "edit" : "add"} deleteKind="twFutures" deleteId={item?.id}>
+      <TwFuturesFields item={item} sinopacAvailable={sinopacAvailable} />
+    </FormDialog>
+  );
+}
+
+/** Rendered inside the dialog's form, which remounts on every open, so the source choice resets with it. */
+function TwFuturesFields({ item, sinopacAvailable }: { item?: TwFuturesAccount; sinopacAvailable: boolean }) {
+  const [source, setSource] = useState<TwFuturesAccount["source"]>(item?.source ?? "manual");
+  return (
+    <>
       <input type="hidden" name="id" value={v(item?.id)} />
       <Field label="帳戶名稱">
         <input name="name" required defaultValue={v(item?.name)} placeholder="台新期貨" className={inputCls} />
@@ -174,7 +183,7 @@ export function TwFuturesForm({ item, sinopacAvailable }: { item?: TwFuturesAcco
       <Field label="備註" wide>
         <input name="note" defaultValue={v(item?.note)} className={inputCls} />
       </Field>
-    </FormDialog>
+    </>
   );
 }
 
