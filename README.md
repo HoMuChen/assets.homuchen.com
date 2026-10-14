@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Assets
 
-## Getting Started
+個人資產儀表板：打開就能看到淨資產、配置與走勢。現金、台股、加密貨幣、房地產（投入現金 + 房貸）統一換算成 TWD。
 
-First, run the development server:
+- **即時報價**：台股走 FinMind `taiwan_stock_tick_snapshot`（sponsor 方案，約 10 秒更新；失敗時退回最新收盤價並標示「收盤價」），加密貨幣走 CoinGecko，外幣匯率走 open.er-api.com。頁面開著時每 30 秒更新一次。
+- **每日快照**：每天 23:55（台北時間）自動記錄一次；伺服器啟動時若當天還沒有快照也會補一筆。`歷史快照` 頁可手動觸發。
+- **房貸**：依撥款日、利率、年限、寬限期自動計算剩餘本金（本息平均攤還）；有提前還款時可手動覆寫剩餘本金。
+- **漲跌顏色**：台灣慣例紅漲綠跌，並附 ▲▼ 符號。要改成國際慣例，對調 `src/app/globals.css` 的 `--up` / `--down`。
+
+## 部署（Docker）
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env        # 填入 FINMIND_TOKEN 與 APP_PASSWORD
+mkdir -p data && sudo chown 1000:1000 data   # 容器以 node (uid 1000) 執行
+docker compose up -d --build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+資料都在 `./data/assets.db`（SQLite），備份這個資料夾即可。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+建議放在 reverse proxy（Caddy / Nginx / Cloudflare Tunnel）後面提供 HTTPS 給 `assets.homuchen.com`。若暫時只用 HTTP 存取，請在 `.env` 設 `COOKIE_SECURE=false`，否則登入 cookie 不會被瀏覽器保存。
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 環境變數
 
-## Learn More
+| 變數 | 說明 |
+| --- | --- |
+| `FINMIND_TOKEN` | FinMind API token（sponsor 才有即時報價） |
+| `APP_PASSWORD` | 登入密碼；留空則不需登入（只建議在內網使用） |
+| `COINGECKO_API_KEY` | 選填，CoinGecko demo key |
+| `COOKIE_SECURE` | 預設 `true`；純 HTTP 時設 `false` |
+| `DATA_DIR` | SQLite 存放位置，容器內預設 `/data` |
+| `DISABLE_SCHEDULER` | 設 `true` 可停用排程（例如同時跑多個實例時） |
 
-To learn more about Next.js, take a look at the following resources:
+## 本機開發
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npm install
+cp .env.example .env.local
+npm run dev
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 架構
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Next.js 16（App Router, Server Actions）+ Tailwind v4 + Recharts
+- `better-sqlite3`，schema 在 `src/lib/db.ts` 啟動時自動建立
+- `src/instrumentation.ts` 啟動 `node-cron` 排程（`src/lib/scheduler.ts`）
+- `src/lib/prices.ts` 報價抓取與快取，`src/lib/portfolio.ts` 彙總，`src/lib/snapshot.ts` 每日快照

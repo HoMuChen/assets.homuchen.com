@@ -1,5 +1,6 @@
 "use server";
 
+import { timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -269,7 +270,9 @@ export async function snapshotNow(): Promise<ActionState> {
 export async function login(_: ActionState, fd: FormData): Promise<ActionState> {
   const password = String(fd.get("password") ?? "");
   const expected = process.env.APP_PASSWORD;
-  if (!expected || password !== expected) {
+  const a = Buffer.from(password);
+  const b = Buffer.from(expected ?? "");
+  if (!expected || a.length !== b.length || !timingSafeEqual(a, b)) {
     await new Promise((r) => setTimeout(r, 600));
     return { ok: false, error: "密碼錯誤" };
   }
