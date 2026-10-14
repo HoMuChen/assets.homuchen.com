@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { logout, logoutAll } from "@/lib/actions";
 import { IconCash, IconCrypto, IconFutures, IconHistory, IconHouse, IconLogout, IconOverview, IconStock } from "./icons";
+import { Logo } from "./logo";
 
 const NAV = [
   { href: "/", label: "總覽", icon: IconOverview },
@@ -24,10 +25,7 @@ export function Sidebar({ authEnabled }: { authEnabled: boolean }) {
       {/* Desktop sidebar */}
       <aside className="hidden w-[220px] shrink-0 flex-col border-r border-line bg-bg md:flex">
         <div className="flex h-12 items-center gap-2 px-4">
-          <svg width="18" height="18" viewBox="0 0 32 32" aria-hidden>
-            <rect width="32" height="32" rx="8" fill="var(--accent)" />
-            <path d="M9 21l5-6 4 3 5-7" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          <Logo size={18} />
           <span className="text-[13px] font-medium">Assets</span>
         </div>
         <nav className="flex flex-col gap-px px-2 pt-1">

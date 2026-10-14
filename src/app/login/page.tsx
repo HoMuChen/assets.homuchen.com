@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import { login } from "@/lib/actions";
+import { Logo } from "@/components/logo";
 
 export default function LoginPage() {
   const [state, action, pending] = useActionState(login, null);
@@ -9,10 +10,7 @@ export default function LoginPage() {
     <div className="flex min-h-full items-center justify-center px-4">
       <form action={action} className="flex w-full max-w-[320px] flex-col gap-4">
         <div className="mb-2 flex flex-col items-center gap-3">
-          <svg width="36" height="36" viewBox="0 0 32 32" aria-hidden>
-            <rect width="32" height="32" rx="8" fill="var(--accent)" />
-            <path d="M9 21l5-6 4 3 5-7" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          <Logo size={36} />
           <h1 className="text-[15px] font-medium">登入 Assets</h1>
         </div>
         <input
