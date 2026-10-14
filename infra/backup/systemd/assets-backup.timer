@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily assets database backup
+
+[Timer]
+# After the 23:55 snapshot and away from HQ's 03:00 backup
+OnCalendar=*-*-* 03:30:00 Asia/Taipei
+# Catch up after boot if the VM was down at 03:30
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

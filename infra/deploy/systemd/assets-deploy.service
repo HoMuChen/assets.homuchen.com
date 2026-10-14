@@ -1,0 +1,14 @@
+# One deploy check: only deploys when :prod has a new digest. Started by the receiver, the timer, or by hand.
+# Logs: journalctl -u assets-deploy
+[Unit]
+Description=assets deploy (follow ghcr :prod)
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=deploy
+Group=deploy
+Environment=ASSETS_HOME=/opt/assets
+ExecStart=/opt/assets/deploy.sh
+TimeoutStartSec=10min

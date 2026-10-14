@@ -1,0 +1,11 @@
+# Daily SQLite backup to R2. Logs: journalctl -u assets-backup
+[Unit]
+Description=assets database backup to object storage
+
+[Service]
+Type=oneshot
+User=deploy
+Group=deploy
+Environment=ASSETS_HOME=/opt/assets
+ExecStart=/opt/assets/backup.sh
+TimeoutStartSec=15min

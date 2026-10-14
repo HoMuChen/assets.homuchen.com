@@ -1,0 +1,80 @@
+name: Deploy
+
+# Manual deploy: point :prod at a build, then ping the VM to pull it (infra/deploy/deploy.sh).
+# The VM only follows :prod, so pushing main never ships by itself; rollback is this workflow with an older sha.
+#   gh workflow run Deploy                 # latest commit on main
+#   gh workflow run Deploy -f sha=abc1234  # a specific build (rollback)
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit to deploy (7 chars); empty = latest on main
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/homuchen/assets
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    environment:
+      name: production
+      url: ${{ vars.DEPLOY_URL }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          sparse-checkout: infra/deploy
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+        run: |
+          if [ -n "$INPUT_SHA" ] && ! printf '%s' "$INPUT_SHA" | grep -Eq '^[0-9a-f]{4,40}$'; then
+            echo "::error::sha must be a commit hash (4-40 chars of 0-9a-f)"
+            exit 1
+          fi
+          sha=$(git rev-parse --short=7 "${INPUT_SHA:-HEAD}^{commit}")
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "deploying $sha: $(git log -1 --format=%s "$sha")"
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Point :prod at the image
+        env:
+          SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          if ! docker buildx imagetools inspect "$IMAGE:sha-$SHA" >/dev/null 2>&1; then
+            echo "::error::$IMAGE:sha-$SHA does not exist: the commit has not been built yet (CI / Build still running) or failed CI"
+            exit 1
+          fi
+          docker buildx imagetools create --tag "$IMAGE:prod" "$IMAGE:sha-$SHA"
+
+      - name: Notify VM and wait for /api/health
+        env:
+          DEPLOY_WEBHOOK_SECRET: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+          SHORT_SHA: ${{ steps.version.outputs.sha }}
+        run: infra/deploy/notify.sh "$DEPLOY_URL" "$SHORT_SHA"
+
+      - name: Summary
+        env:
+          SHA: ${{ steps.version.outputs.sha }}
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+        run: echo "### Deployed \`$SHA\` to $DEPLOY_URL" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,2 @@
+# Installed as /etc/sudoers.d/assets-hook (0440). The receiver may only trigger a deploy check.
+assets-hook ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block assets-deploy.service

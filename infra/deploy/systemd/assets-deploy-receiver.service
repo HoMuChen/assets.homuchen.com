@@ -1,0 +1,22 @@
+# The Deploy workflow POSTs /_deploy (edge Caddy forwards it here); a valid HMAC queues assets-deploy.service.
+[Unit]
+Description=assets deploy webhook receiver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=assets-hook
+Group=assets-hook
+# DEPLOY_WEBHOOK_SECRET=... (root:assets-hook 0640)
+EnvironmentFile=/etc/assets/deploy-webhook.env
+# An empty secret would let anyone compute a valid signature
+ExecStartPre=/bin/sh -c 'test "$${#DEPLOY_WEBHOOK_SECRET}" -ge 32 || { echo "DEPLOY_WEBHOOK_SECRET must be at least 32 characters" >&2; exit 1; }'
+# Loopback only: the edge Caddy on this host is the sole client
+ExecStart=/usr/bin/webhook -hooks /etc/assets/hooks.json -template -ip 127.0.0.1 -port 9001 -urlprefix hooks
+Restart=on-failure
+# Needs sudo to start assets-deploy.service, so no NoNewPrivileges / ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

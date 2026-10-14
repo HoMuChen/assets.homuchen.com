@@ -1,0 +1,27 @@
+# Site for the VM's edge Caddy (github.com/HoMuChen/homuchen-edge).
+# infra/vm/setup.sh installs it as /etc/caddy/sites/assets.caddy and reloads Caddy.
+assets.homuchen.com {
+	import common
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+
+	# CD: the Deploy workflow pings the VM to pull :prod. The receiver checks the HMAC itself.
+	handle /_deploy {
+		rewrite * /hooks/deploy
+		reverse_proxy 127.0.0.1:9001
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:3100 {
+			# The login lockout keys on CF-Connecting-IP / X-Real-IP first (src/lib/auth.ts). This host is not
+			# behind Cloudflare, so drop whatever the client sent and pass the real peer address instead.
+			header_up -CF-Connecting-IP
+			header_up X-Real-IP {remote_host}
+		}
+	}
+}

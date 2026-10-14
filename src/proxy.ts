@@ -15,5 +15,5 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   // Exact-match the public paths (`$`) so look-alikes such as /login-x still require a session.
-  matcher: ["/((?!login$|_next/static|_next/image|favicon\\.ico$|icon\\.svg$).*)"],
+  matcher: ["/((?!login$|api/health$|_next/static|_next/image|favicon\\.ico$|icon\\.svg$).*)"],
 };

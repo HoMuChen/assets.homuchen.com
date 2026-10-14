@@ -1,0 +1,23 @@
+[
+  {
+    "id": "deploy",
+    "execute-command": "/usr/bin/sudo",
+    "pass-arguments-to-command": [
+      { "source": "string", "name": "/usr/bin/systemctl" },
+      { "source": "string", "name": "start" },
+      { "source": "string", "name": "--no-block" },
+      { "source": "string", "name": "assets-deploy.service" }
+    ],
+    "http-methods": ["POST"],
+    "response-message": "deploy check queued\n",
+    "success-http-response-code": 202,
+    "trigger-rule-mismatch-http-response-code": 401,
+    "trigger-rule": {
+      "match": {
+        "type": "payload-hmac-sha256",
+        "secret": "{{ getenv `DEPLOY_WEBHOOK_SECRET` }}",
+        "parameter": { "source": "header", "name": "X-Hub-Signature-256" }
+      }
+    }
+  }
+]

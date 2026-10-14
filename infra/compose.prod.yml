@@ -1,0 +1,39 @@
+# Production, on the shared homuchen.com VM. Run by infra/deploy/deploy.sh, which sets:
+#   ASSETS_IMAGE  the image pinned to a digest (ghcr.io/homuchen/assets@sha256:...)
+#   .env          next to this file: FINMIND_TOKEN, APP_PASSWORD, ... (see infra/vm/env.production.example)
+#
+# TLS and the public hostname live in the VM's edge Caddy (github.com/HoMuChen/homuchen-edge);
+# this service only listens on 127.0.0.1:3100.
+name: assets
+
+services:
+  assets:
+    image: ${ASSETS_IMAGE:?ASSETS_IMAGE is required}
+    init: true
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_OPTIONS: --max-old-space-size=256
+    ports:
+      - "127.0.0.1:3100:3000"
+    # SQLite lives on the host (/opt/assets/data) so backup.sh can read it; the container runs as uid 1000 = deploy
+    volumes:
+      - ../data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    mem_limit: 384m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

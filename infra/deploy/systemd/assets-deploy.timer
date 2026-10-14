@@ -1,0 +1,11 @@
+# Catch-up: if a webhook is missed (reboot, network blip), :prod is still picked up within 10 minutes
+[Unit]
+Description=Periodic assets deploy check
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=10min
+RandomizedDelaySec=30s
+
+[Install]
+WantedBy=timers.target

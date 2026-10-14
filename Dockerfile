@@ -25,7 +25,12 @@ RUN mkdir -p /data && chown node:node /data
 COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
 COPY --from=builder --chown=node:node /app/public ./public
+# infra/deploy/deploy.sh extracts the compose file from the image it is about to run
+COPY --chown=node:node infra/compose.prod.yml ./infra/compose.prod.yml
 USER node
 VOLUME ["/data"]
 EXPOSE 3000
+# Last, so a new commit does not invalidate earlier layers; reported by /api/health
+ARG GIT_SHA=dev
+ENV GIT_SHA=$GIT_SHA
 CMD ["node", "server.js"]

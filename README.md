@@ -8,24 +8,77 @@
 - **房貸**：依撥款日、利率、年限、寬限期自動計算剩餘本金（本息平均攤還）；有提前還款時可手動覆寫剩餘本金。
 - **漲跌顏色**：台灣慣例紅漲綠跌，並附 ▲▼ 符號。要改成國際慣例，對調 `src/app/globals.css` 的 `--up` / `--down`。
 
-## 部署（Docker）
+## 正式環境
+
+跑在 homuchen.com 共用的 VM（Linode `hq-prod`，與 HQ 同台）。對外入口是 VM 層級的 edge Caddy
+（[homuchen-edge](https://github.com/HoMuChen/homuchen-edge)），本服務只聽 `127.0.0.1:3100`。部署流程照搬 HQ：
+
+```
+push main ──► CI（lint、tsc）──► Build：ghcr.io/homuchen/assets:sha-xxxxxxx、:main（不部署）
+
+gh workflow run Deploy [-f sha=xxxxxxx]
+  1. :prod 指到該版
+  2. POST https://assets.homuchen.com/_deploy（HMAC）→ VM 上的 receiver（127.0.0.1:9001）
+  3. VM：/opt/assets/deploy.sh → pull :prod → 備份 SQLite 到 state/pre-deploy.db → 換版
+     → /api/health 的 version 要等於 GIT_SHA，否則切回上一版
+  4. Actions 輪詢 /api/health 直到版本更新 → 綠燈 / 紅燈
+```
+
+`assets-deploy.timer` 每 10 分鐘補檢查一次 `:prod`；`assets-backup.timer` 每天 03:30（台北）把 SQLite
+備份到 R2 的 `hq-backup/assets/`（與 HQ 共用 bucket，HQ 只清 `db/`），保留最近 14 份＋近 12 個月每月一份。
+
+| VM 上的路徑 | 內容 |
+| --- | --- |
+| `/opt/assets/.env` | 給 container 的設定（`FINMIND_TOKEN`、`APP_PASSWORD`…），範本 `infra/vm/env.production.example` |
+| `/opt/assets/backup.env` | R2 金鑰，只給 `backup.sh`，範本 `infra/vm/backup.env.example` |
+| `/opt/assets/data/assets.db` | SQLite（container 的 `/data`） |
+| `/opt/assets/state/`、`releases.log` | 部署狀態與紀錄，同 HQ |
+| `/etc/caddy/sites/assets.caddy` | edge Caddy 的站台設定，來源 `infra/caddy/assets.caddy` |
+
+### 初始化（一次）
+
+```bash
+rsync -a --delete infra/ hq:/root/assets-infra/
+ssh hq /root/assets-infra/vm/setup.sh          # 先跑過 homuchen-edge 與 HQ 的 setup.sh
+# 填 /opt/assets/.env、/opt/assets/backup.env
+ssh hq 'sudo -u deploy /opt/assets/deploy.sh sha-<7碼> && systemctl enable --now assets-deploy.timer assets-backup.timer'
+```
+
+GitHub：secret `DEPLOY_WEBHOOK_SECRET`（VM 的 `/etc/assets/deploy-webhook.env`）、variable `DEPLOY_URL=https://assets.homuchen.com`。
+改了 `infra/` 裡的腳本、units 或 Caddy 站台時，重跑上面兩行 `rsync` + `setup.sh`。
+
+### 日常操作
+
+```bash
+gh workflow run Deploy                       # 部署 main 最新版；-f sha=<7碼> 回到舊版
+ssh hq journalctl -u assets-deploy -n 50     # 部署紀錄（也看 /opt/assets/releases.log）
+ssh hq journalctl -u assets-backup -n 20     # 備份紀錄
+ssh hq 'cd /opt/assets && ASSETS_IMAGE=$(cat state/current) docker compose -p assets -f app/compose.prod.yml logs -f --tail 100'
+```
+
+還原：停掉服務、用備份檔取代 `/opt/assets/data/assets.db`（並刪掉 `assets.db-wal`、`assets.db-shm`），再啟動：
+
+```bash
+# 從 R2 下載某一份（或用部署前的快照 /opt/assets/state/pre-deploy.db）後 gunzip
+C="docker compose -p assets -f /opt/assets/app/compose.prod.yml"
+export ASSETS_IMAGE=$(cat /opt/assets/state/current)
+$C stop && cp assets.db /opt/assets/data/assets.db && rm -f /opt/assets/data/assets.db-{wal,shm} && $C start
+```
+
+### 本機用 Docker 試跑
 
 ```bash
 cp .env.example .env        # 填入 FINMIND_TOKEN 與 APP_PASSWORD
 mkdir -p data && sudo chown 1000:1000 data   # 容器以 node (uid 1000) 執行
-docker compose up -d --build
+docker compose up -d --build                 # http://localhost:3000；純 HTTP 時 .env 設 COOKIE_SECURE=false
 ```
-
-資料都在 `./data/assets.db`（SQLite），備份這個資料夾即可。
-
-建議放在 reverse proxy（Caddy / Nginx / Cloudflare Tunnel）後面提供 HTTPS 給 `assets.homuchen.com`。若暫時只用 HTTP 存取，請在 `.env` 設 `COOKIE_SECURE=false`，否則登入 cookie 不會被瀏覽器保存。
 
 ### 登入安全
 
 - 每次登入產生一組隨機 session token（cookie 為 `httpOnly`、`sameSite=lax`），資料庫只存 SHA-256 雜湊，伺服器端 30 天到期。
 - 登出只會登出目前裝置；側邊欄的「登出所有裝置」會撤銷全部 session。修改 `APP_PASSWORD` 後重啟，所有既有 session 也會失效。
 - 防暴力破解：同一 IP 15 分鐘內錯 5 次鎖 15 分鐘；全站 15 分鐘內累計錯 20 次則暫停所有登入 15 分鐘（已登入的裝置不受影響）。鎖定期間正確密碼也會被拒。
-- 客戶端 IP 依序取自 `CF-Connecting-IP`、`X-Real-IP`、`X-Forwarded-For`，請確保 reverse proxy 會覆寫這些 header；直接對外暴露時 header 可被偽造，此時主要靠全站上限防護。
+- 客戶端 IP 依序取自 `CF-Connecting-IP`、`X-Real-IP`、`X-Forwarded-For`，reverse proxy 必須覆寫這些 header（正式環境的 `infra/caddy/assets.caddy` 會移除 `CF-Connecting-IP` 並以真實來源覆寫 `X-Real-IP`）；直接對外暴露時 header 可被偽造，此時主要靠全站上限防護。
 
 ### 環境變數
 
