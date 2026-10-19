@@ -25,7 +25,7 @@ RUN mkdir -p /data && chown node:node /data
 # The SinoPac sidecar (sinopac/server.py) runs from this same image with its own command; see infra/compose.prod.yml.
 # shioaji ships an abi3 manylinux wheel with no dependencies, so Debian's python3 is enough.
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv && rm -rf /var/lib/apt/lists/* \
-    && python3 -m venv /opt/sinopac && /opt/sinopac/bin/pip install --no-cache-dir shioaji==1.7.2
+    && python3 -m venv /opt/sinopac && /opt/sinopac/bin/pip install --no-cache-dir shioaji==1.7.8
 COPY --chown=node:node sinopac/server.py ./sinopac/server.py
 COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
