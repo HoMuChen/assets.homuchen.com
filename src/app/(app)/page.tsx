@@ -16,6 +16,7 @@ export default function OverviewPage() {
   const today = taipeiDate();
   const prev = [...snapshots].reverse().find((s) => s.date < today);
   const vsPrev = prev ? t.netWorth - prev.net_worth : null;
+  const yesterday = new Date(Date.parse(`${today}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
 
   // Net-worth composition: real estate counts as equity (market value − mortgage).
   const parts: Record<Category, number> = {
@@ -61,16 +62,14 @@ export default function OverviewPage() {
         <div className="flex flex-col gap-2 px-1">
           <span className="text-[12px] text-fg-3">淨資產</span>
           <div className="num text-[34px] font-semibold leading-none tracking-tight md:text-[40px]">{fmtTwd(t.netWorth)}</div>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
-            <span className="flex items-center gap-1.5 text-fg-3">
-              今日市值變動 <Delta value={t.dayChange} pct={t.netWorth ? (t.dayChange / (t.netWorth - t.dayChange)) * 100 : null} />
-            </span>
-            {prev && (
+          {prev && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
               <span className="flex items-center gap-1.5 text-fg-3">
-                較 {prev.date.slice(5).replace("-", "/")} 快照 <Delta value={vsPrev} pct={prev.net_worth ? (vsPrev! / Math.abs(prev.net_worth)) * 100 : null} />
+                {prev.date === yesterday ? "較昨日" : `較 ${prev.date.slice(5).replace("-", "/")}`}{" "}
+                <Delta value={vsPrev} pct={prev.net_worth ? (vsPrev! / Math.abs(prev.net_worth)) * 100 : null} />
               </span>
-            )}
-          </div>
+            </div>
+          )}
           {p.missingPrices.length > 0 && (
             <div className="mt-1">
               <Badge tone="warning">⚠ 尚無報價，暫以 0 計：{p.missingPrices.join("、")}</Badge>

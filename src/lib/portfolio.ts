@@ -99,7 +99,6 @@ export type Portfolio = {
     totalAssets: number;
     totalLiabilities: number;
     netWorth: number;
-    dayChange: number;
   };
   /** Holdings whose quote is missing, so their value counts as 0. */
   missingPrices: string[];
@@ -300,7 +299,6 @@ export function getPortfolio(): Portfolio {
       totalAssets,
       totalLiabilities,
       netWorth: totalAssets - totalLiabilities,
-      dayChange: sum([...stocks, ...crypto, ...futures].map((h) => h.position.dayChangeTwd ?? 0)),
     },
     missingPrices: missing,
     lastPriceAt: fetched[fetched.length - 1] ?? null,
