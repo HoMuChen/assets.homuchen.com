@@ -28,6 +28,8 @@ export default function OverviewPage() {
   };
   const positive = CATEGORY_ORDER.reduce((a, c) => a + Math.max(0, parts[c]), 0);
   const share = (c: Category) => (positive > 0 ? (Math.max(0, parts[c]) / positive) * 100 : 0);
+  // Largest share first; negative equity (share 0) sinks to the bottom.
+  const allocation = [...CATEGORY_ORDER].sort((a, b) => parts[b] - parts[a]);
 
   const positions = [...p.stocks, ...p.crypto, ...p.futures, ...p.twFutures, ...p.cash]
     .map((x) => x.position)
@@ -108,13 +110,13 @@ export default function OverviewPage() {
             <CardHeader title="淨資產配置" />
             <div className="px-4 pt-4">
               <div className="flex h-2 gap-[2px] overflow-hidden rounded-full bg-panel-2" role="img" aria-label="淨資產配置比例">
-                {CATEGORY_ORDER.filter((c) => share(c) > 0).map((c) => (
+                {allocation.filter((c) => share(c) > 0).map((c) => (
                   <div key={c} style={{ width: `${share(c)}%`, background: CATEGORY_COLOR[c] }} />
                 ))}
               </div>
             </div>
             <ul className="flex flex-col py-2">
-              {CATEGORY_ORDER.map((c) => (
+              {allocation.map((c) => (
                 <li key={c}>
                   <Link href={CATEGORY_HREF[c]} className="flex items-center gap-3 px-4 py-2 transition-colors hover:bg-hover">
                     <CategoryDot color={CATEGORY_COLOR[c]} />
