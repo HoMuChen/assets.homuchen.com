@@ -10,6 +10,7 @@ import {
   deleteTransaction,
   LedgerError,
   saveCashAccount,
+  transferAsset,
   updateAccount,
   updateTransaction,
 } from "./transactions";
@@ -91,6 +92,33 @@ describe("updateTransaction / deleteTransaction", () => {
   });
 });
 
+describe("transferAsset", () => {
+  it("moves units between your own accounts at the sender's average cost, once per source id", () => {
+    const from = holding("crypto:bitcoin", 2, 1_000_000, { account: "冷錢包" });
+    const to = holding("crypto:bitcoin", 1, 3_000_000, { account: "Bybit" });
+    const move = () => transferAsset({ fromId: from, toId: to, asset: "crypto:bitcoin", quantity: 0.5, date: "2026-03-01", note: null, source: "bybit", externalId: "bybit:deposit:1" });
+    expect(move()).toEqual(expect.any(Number));
+    expect(move()).toBeNull();
+    const held = Object.fromEntries(ledgerHoldings("crypto").map((h) => [h.account, [h.quantity, h.cost]]));
+    expect(held).toEqual({ 冷錢包: [1.5, 1_500_000], Bybit: [1.5, 3_500_000] });
+    expect(listTransactions({ accountId: from })[0]).toMatchObject({ type: "transfer", quantity: -0.5, note: "轉到 Bybit" });
+    expect(compareWithLedger()).toEqual([]);
+  });
+
+  it("refuses moves the ledger can't follow", () => {
+    const a = holding("crypto:bitcoin", 1, 1, { account: "冷錢包" });
+    const b = holding("crypto:bitcoin", 1, 1, { account: "Bybit" });
+    const s = holding("tw:2330", 1, 1);
+    const move = (fromId: number, toId: number, quantity = 1) => () =>
+      transferAsset({ fromId, toId, asset: "crypto:bitcoin", quantity, date: "2026-03-01", note: null });
+    expect(move(a, a)).toThrow("不能是同一個帳戶");
+    expect(move(a, s)).toThrow("同類型");
+    expect(move(a, b, 0)).toThrow("必須大於 0");
+    expect(move(a, b, 5)).toThrow(LedgerError);
+    expect(ledgerHoldings("crypto").map((h) => h.quantity)).toEqual([1, 1]);
+  });
+});
+
 describe("accounts", () => {
   it("renames the old tables' labels with the account, and refuses a duplicate name", () => {
     const a = holding("tw:2330", 1, 1, { account: "國泰" });
@@ -106,6 +134,16 @@ describe("accounts", () => {
     const a = holding("crypto:bitcoin", 1, 1);
     deleteAccount(a);
     expect([rows("accounts"), rows("transactions"), rows("crypto_holdings")]).toEqual([[], [], []]);
+  });
+
+  it("unlinks a futures wallet from the ledger account it deletes", () => {
+    const id = Number(
+      db().prepare("INSERT INTO accounts (kind, name, currency, source, created_at, updated_at) VALUES ('futures', 'UTA', 'USDT', 'bybit', '', '')").run()
+        .lastInsertRowid,
+    );
+    db().prepare("INSERT INTO futures_accounts (name, source, account_id) VALUES ('UTA', 'bybit', ?)").run(id);
+    deleteAccount(id);
+    expect(rows("futures_accounts")).toMatchObject([{ account_id: null }]);
   });
 
   it("logs a cash balance change as today's adjustment, and keeps the old row set to what was typed", () => {

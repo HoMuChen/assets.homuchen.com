@@ -1,10 +1,11 @@
 "use client";
 
 import { useId, useState } from "react";
-import { saveAccount, saveCash, saveFuturesAccount, saveFuturesPosition, saveProperty, saveTransaction, saveTwFutures } from "@/lib/actions";
+import { acceptInbox, saveAccount, saveCash, saveFuturesAccount, saveFuturesPosition, saveProperty, saveTransaction, saveTwFutures } from "@/lib/actions";
 import type { Account, FuturesAccount, FuturesPosition, Property, TwFuturesAccount, TxType } from "@/lib/db";
 import { twTradeCosts } from "@/lib/fees";
 import { fmtNum } from "@/lib/format";
+import type { InboxView } from "@/lib/inbox";
 import type { CashBalance, TxRow } from "@/lib/ledger";
 import { assetId, TX_LABEL } from "@/lib/tx";
 import { Field, FormDialog, inputCls } from "./form-dialog";
@@ -239,13 +240,14 @@ function TxFields({
   );
 }
 
-export function AccountForm({ item }: { item: Account }) {
+export function AccountForm({ item, bybitAvailable = false }: { item: Account; bybitAvailable?: boolean }) {
   return (
     <FormDialog
       title={`編輯 ${item.name}`}
       action={saveAccount}
       trigger="edit"
-      deleteKind="account"
+      // A synced futures wallet's ledger goes with its futures account (加密貨幣 page).
+      deleteKind={item.kind === "futures" ? undefined : "account"}
       deleteId={item.id}
       deleteWarning="會一併刪除這個帳戶的所有交易紀錄與持股。"
     >
@@ -256,6 +258,24 @@ export function AccountForm({ item }: { item: Account }) {
       <Field label="機構">
         <input name="institution" defaultValue={v(item.institution)} className={inputCls} />
       </Field>
+      {item.kind === "crypto" && (
+        <Field
+          label="資料來源"
+          hint={
+            bybitAvailable || item.source === "bybit"
+              ? "Bybit：現貨成交自動入帳，餘額和帳本不同、入金與提領會列在「待確認」。所有 USDT 算在連結 Bybit 的合約帳戶"
+              : "伺服器未設定 Bybit API，只能手動記錄"
+          }
+          wide
+        >
+          <select name="source" defaultValue={item.source === "bybit" ? "bybit" : "manual"} className={inputCls}>
+            <option value="manual">手動記錄</option>
+            <option value="bybit" disabled={!bybitAvailable && item.source !== "bybit"}>
+              Bybit API（自動同步現貨）
+            </option>
+          </select>
+        </Field>
+      )}
       {item.kind === "stock" && (
         <Field label="手續費折扣（折）" hint="例如 2.8 折填 2.8；空白 = 不打折。用來預填手續費" wide>
           <input
@@ -273,7 +293,7 @@ export function AccountForm({ item }: { item: Account }) {
   );
 }
 
-export function FuturesAccountForm({ item }: { item?: FuturesAccount }) {
+export function FuturesAccountForm({ item, bybitAvailable }: { item?: FuturesAccount; bybitAvailable: boolean }) {
   return (
     <FormDialog
       title={item ? `編輯 ${item.name}` : "新增合約帳戶"}
@@ -282,21 +302,125 @@ export function FuturesAccountForm({ item }: { item?: FuturesAccount }) {
       triggerLabel={item ? undefined : "新增合約帳戶"}
       deleteKind="futuresAccount"
       deleteId={item?.id}
+      deleteWarning={item?.account_id ? "會一併刪除底下所有部位，以及同步進來的資金紀錄。" : "會一併刪除底下所有部位。"}
     >
-      <input type="hidden" name="id" value={v(item?.id)} />
-      <Field label="帳戶名稱" wide>
-        <input name="name" required defaultValue={v(item?.name)} placeholder="Binance U 本位" className={inputCls} />
-      </Field>
-      <Field label="錢包餘額 (USDT)" hint="交易所顯示的「錢包餘額」，不含未實現損益" wide>
-        <input name="wallet_balance" required inputMode="decimal" defaultValue={v(item?.wallet_balance)} className={`${inputCls} num`} />
-      </Field>
-      <Field label="備註" wide>
-        <input name="note" defaultValue={v(item?.note)} className={inputCls} />
-      </Field>
-      {item && <p className="text-[11px] text-fg-4 sm:col-span-2">刪除帳戶會一併刪除底下所有部位。</p>}
+      <FuturesAccountFields item={item} bybitAvailable={bybitAvailable} />
     </FormDialog>
   );
 }
+
+function FuturesAccountFields({ item, bybitAvailable }: { item?: FuturesAccount; bybitAvailable: boolean }) {
+  const [source, setSource] = useState<FuturesAccount["source"]>(item?.source ?? "manual");
+  return (
+    <>
+      <input type="hidden" name="id" value={v(item?.id)} />
+      <Field label="帳戶名稱">
+        <input name="name" required defaultValue={v(item?.name)} placeholder="Bybit U 本位" className={inputCls} />
+      </Field>
+      <Field label="資料來源" hint={bybitAvailable || item?.source === "bybit" ? undefined : "伺服器未設定 Bybit API，只能手動輸入"}>
+        <select name="source" value={source} onChange={(e) => setSource(e.target.value as FuturesAccount["source"])} className={inputCls}>
+          <option value="manual">手動輸入</option>
+          <option value="bybit" disabled={!bybitAvailable && item?.source !== "bybit"}>
+            Bybit API（自動同步）
+          </option>
+        </select>
+      </Field>
+      {source === "manual" ? (
+        <Field label="錢包餘額 (USDT)" hint="交易所顯示的「錢包餘額」，不含未實現損益" wide>
+          <input name="wallet_balance" required inputMode="decimal" defaultValue={v(item?.wallet_balance)} className={`${inputCls} num`} />
+        </Field>
+      ) : (
+        <p className="text-[11px] text-fg-4 sm:col-span-2">
+          錢包餘額（統一交易帳戶＋資金帳戶的 USDT）、部位、標記價與強平價每分鐘同步；每 10 分鐘把資金費率、平倉損益、入金與提領記進交易紀錄。
+        </p>
+      )}
+      <Field label="備註" wide>
+        <input name="note" defaultValue={v(item?.note)} className={inputCls} />
+      </Field>
+    </>
+  );
+}
+
+export type CounterpartOption = { id: number; name: string; kind: Account["kind"] };
+
+/** Confirm an inbox item as a transaction; the fields start from what the sync or import suggested. */
+export function InboxForm({ item, accepts, counterparts, today }: { item: InboxView; accepts: TxType[]; counterparts: CounterpartOption[]; today: string }) {
+  return (
+    <FormDialog title={`確認：${item.title}`} action={acceptInbox} trigger="edit" triggerLabel="確認">
+      <InboxFields item={item} accepts={accepts} counterparts={counterparts.filter((c) => c.kind === item.accountKind && c.id !== item.account_id)} today={today} />
+    </FormDialog>
+  );
+}
+
+function InboxFields({ item, accepts, counterparts, today }: { item: InboxView; accepts: TxType[]; counterparts: CounterpartOption[]; today: string }) {
+  const [type, setType] = useState<TxType>(accepts.includes(item.type) ? item.type : accepts[0]);
+  const cash = item.asset == null;
+  const unit = cash ? item.currency : (item.symbol ?? "");
+  const priced = !cash && (type === "buy" || type === "sell" || type === "deposit");
+  return (
+    <>
+      <input type="hidden" name="id" value={item.id} />
+      <p className="text-[12px] text-fg-3 sm:col-span-2">
+        {item.accountName}
+        {item.detail ? ` · ${item.detail}` : ""}
+        {item.error ? ` · ${item.error}` : ""}
+      </p>
+      <Field label="記成">
+        <select name="type" value={type} onChange={(e) => setType(e.target.value as TxType)} className={inputCls}>
+          {accepts.map((t) => (
+            <option key={t} value={t}>
+              {TX_TYPE_HINT[t] ?? TX_LABEL[t]}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field label="日期">
+        <input name="date" type="date" required max={today} defaultValue={item.date} className={`${inputCls} num`} />
+      </Field>
+      {cash ? (
+        <Field label={`金額（${unit}）`} hint="增加填正數、減少填負數">
+          <input name="amount" required inputMode="decimal" defaultValue={v(round(item.amount))} className={`${inputCls} num`} />
+        </Field>
+      ) : (
+        <Field label={`數量（${unit}）`} hint="增加填正數、減少填負數">
+          <input name="quantity" required inputMode="decimal" defaultValue={v(round(item.quantity))} className={`${inputCls} num`} />
+        </Field>
+      )}
+      {priced && (
+        <Field label="每單位價格（TWD）" hint={type === "deposit" ? "這批的成本；預設是入帳時的市價，空白表示成本未知" : undefined}>
+          <input name="price" inputMode="decimal" defaultValue={v(item.price == null ? "" : round(item.price))} className={`${inputCls} num`} />
+        </Field>
+      )}
+      {type === "transfer" && !cash && (
+        <Field label="對方帳戶" hint="成本會跟著轉過來">
+          <select name="counterpart" required defaultValue="" className={inputCls}>
+            <option value="" disabled>
+              選擇帳戶
+            </option>
+            {counterparts.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+      <Field label="備註" wide>
+        <input name="note" defaultValue={item.kind === "record" ? item.title : ""} className={inputCls} />
+      </Field>
+    </>
+  );
+}
+
+/** How a type reads when confirming what a sync found. */
+const TX_TYPE_HINT: Partial<Record<TxType, string>> = {
+  deposit: "入金（從外面轉進來）",
+  withdraw: "出金（轉到外面）",
+  transfer: "轉帳（自己的帳戶之間）",
+  adjust: "調整（直接改數字）",
+};
+
+const round = (n: number) => Math.round(n * 1e8) / 1e8;
 
 export function FuturesPositionForm({ accountId, item }: { accountId: number; item?: FuturesPosition }) {
   return (

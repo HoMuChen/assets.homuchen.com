@@ -1,9 +1,11 @@
 import { activeAlerts, resolvedSince } from "./alerts";
+import { bybitStatus } from "./bybit";
 import { db, type TwFuturesAccount } from "./db";
 import { digestMode } from "./digest";
+import { openCount } from "./inbox";
 import { getRuns } from "./jobs";
 import { compareWithLedger } from "./legacy";
-import { feedStatuses, heartbeatsEnabled, ledgerTrial, riskThresholds } from "./monitor";
+import { feedStatuses, heartbeatsEnabled, ledgerTrial, liquidationThresholds, riskThresholds } from "./monitor";
 import { telegramConfigured } from "./telegram";
 import { sinopacConfigured } from "./tw-futures";
 
@@ -29,6 +31,7 @@ export function getStatus(now = new Date()) {
       anyError: sinopac.some((r) => r.sync_error),
       lastSyncAt: sinopac.map((r) => r.synced_at).filter(Boolean).sort().at(-1) ?? null,
     },
+    bybit: bybitStatus(),
     // created_at is SQLite datetime('now'): UTC without a zone.
     snapshot: latest ? { date: latest.date, at: `${latest.created_at.replace(" ", "T")}Z` } : null,
     /** The 5-minute health check ran recently. */
@@ -36,6 +39,8 @@ export function getStatus(now = new Date()) {
     telegram: telegramConfigured(),
     heartbeats: heartbeatsEnabled(),
     risk: riskThresholds(),
+    liquidation: liquidationThresholds(),
+    inbox: openCount(now),
     digest: digestMode(),
     ledger: { ...ledgerTrial(now), diffs: compareWithLedger() },
   };

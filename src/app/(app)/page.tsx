@@ -5,6 +5,7 @@ import { Badge, Card, CardHeader, CategoryDot, Delta, PageHeader, Stat, td, th, 
 import { activeAlerts } from "@/lib/alerts";
 import { CATEGORY_COLOR, CATEGORY_HREF, CATEGORY_ORDER } from "@/lib/categories";
 import { fmtPct, fmtTwd } from "@/lib/format";
+import { openCount } from "@/lib/inbox";
 import { CATEGORY_LABEL, getPortfolio, type Category } from "@/lib/portfolio";
 import { getSnapshots } from "@/lib/snapshot";
 import { taipeiDate } from "@/lib/time";
@@ -14,6 +15,7 @@ export default function OverviewPage() {
   const p = getPortfolio();
   const t = p.totals;
   const alerts = activeAlerts();
+  const inbox = openCount();
   const snapshots = getSnapshots();
   const today = taipeiDate();
   const prev = [...snapshots].reverse().find((s) => s.date < today);
@@ -93,6 +95,15 @@ export default function OverviewPage() {
               {alerts.map((a) => a.title).join("、")}
             </span>
             <span className="shrink-0 text-[12px] text-fg-3">系統狀態 →</span>
+          </Link>
+        )}
+        {inbox > 0 && (
+          <Link
+            href="/transactions"
+            className="flex items-center gap-2 rounded-lg border border-warning/30 px-4 py-2.5 text-[13px] text-warning transition-colors hover:bg-hover"
+          >
+            <span className="min-w-0 flex-1 truncate">{inbox} 筆同步或匯入的紀錄等你確認，確認後才會記進帳本</span>
+            <span className="shrink-0 text-[12px] text-fg-3">交易紀錄 →</span>
           </Link>
         )}
 

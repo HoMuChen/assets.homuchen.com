@@ -4,7 +4,19 @@
 // did, and compareWithLedger() checks that against a full replay of the ledger.
 
 import { db, type Account, type CashAccount, type CryptoHolding, type StockHolding, type Transaction } from "./db";
-import { getAccount, getAccounts, instruments, ledgerCash, ledgerHoldings, QTY_EPS, replay, seriesTx, type CashBalance, type Holding } from "./ledger";
+import {
+  COSTED_IN,
+  getAccount,
+  getAccounts,
+  instruments,
+  ledgerCash,
+  ledgerHoldings,
+  QTY_EPS,
+  replay,
+  seriesTx,
+  type CashBalance,
+  type Holding,
+} from "./ledger";
 import { assetId } from "./tx";
 
 const TABLE = {
@@ -121,7 +133,7 @@ export function applyToLegacy(tx: Transaction) {
   const { quantity: held, avg } = currentPosition(account, tx.asset);
   const quantity = held + tx.quantity;
   let next = avg;
-  if (tx.quantity > 0 && (tx.type === "open" || tx.type === "buy")) {
+  if (tx.quantity > 0 && COSTED_IN.includes(tx.type)) {
     next = tx.price == null || (held > 0 && avg == null) ? null : (avg ?? 0) * held + tx.price * tx.quantity + tx.fee + tx.tax;
     if (next != null) next /= quantity;
   } else if (tx.quantity > 0) {

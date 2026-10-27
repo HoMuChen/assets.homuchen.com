@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { LedgerModeButton } from "@/components/ledger-mode-button";
 import { TestNotificationButton } from "@/components/test-notification-button";
 import { Card, CardHeader, PageHeader, td, th, tr } from "@/components/ui";
@@ -70,7 +71,7 @@ function AlertItem({ a, now }: { a: AlertRow; now: number }) {
 }
 
 export default function StatusPage() {
-  const { now, alerts, recent, openKeys, runs, feeds, sinopac, snapshot, monitorFresh, telegram, heartbeats, risk, digest, ledger } =
+  const { now, alerts, recent, openKeys, runs, feeds, sinopac, bybit, snapshot, monitorFresh, telegram, heartbeats, risk, liquidation, digest, ledger, inbox } =
     getStatus();
   const sinopacRun = runs.get("sync:sinopac");
   const sinopacTone: Tone =
@@ -79,6 +80,16 @@ export default function StatusPage() {
       : openKeys.has("sync:sinopac")
         ? "danger"
         : sinopac.anyError
+          ? "warning"
+          : "ok";
+  const bybitRun = runs.get("sync:bybit");
+  const bybitLinked = (bybit.futures ? 1 : 0) + (bybit.spot ? 1 : 0);
+  const bybitTone: Tone =
+    bybitLinked === 0 || !bybit.configured
+      ? "idle"
+      : openKeys.has("sync:bybit")
+        ? "danger"
+        : isFailing(bybitRun) || bybit.futures?.sync_error
           ? "warning"
           : "ok";
   const monitorRun = runs.get("monitor");
@@ -172,6 +183,32 @@ export default function StatusPage() {
                   </td>
                   <td className={td}>
                     <ErrorText run={sinopacRun} />
+                  </td>
+                </tr>
+                <tr className={tr}>
+                  <td className={td}>
+                    <span className="text-fg">Bybit 同步</span> <span className="text-[12px] text-fg-4">V5 API 唯讀</span>
+                  </td>
+                  <td className={td}>
+                    <Health tone={bybitTone}>
+                      {bybitTone === "idle"
+                        ? bybitLinked === 0
+                          ? "未使用"
+                          : "未設定 BYBIT_API_KEY"
+                        : bybitTone === "ok"
+                          ? "正常"
+                          : bybitTone === "danger"
+                            ? "同步失敗"
+                            : "上次有錯誤"}
+                    </Health>
+                    {bybit.pendingFills > 0 && <span className="ml-2 text-[12px] text-warning">{bybit.pendingFills} 筆成交待套用</span>}
+                  </td>
+                  <td className={`${td} num text-right text-fg-2`}>{bybitLinked}</td>
+                  <td className={td}>
+                    <When iso={bybitRun?.last_ok_at ?? bybit.futures?.synced_at ?? null} now={now} />
+                  </td>
+                  <td className={td}>
+                    <ErrorText run={bybitRun} />
                   </td>
                 </tr>
               </tbody>
@@ -300,6 +337,16 @@ export default function StatusPage() {
           )}
         </Card>
 
+        {inbox > 0 && (
+          <Link
+            href="/transactions"
+            className="flex items-center gap-2 rounded-lg border border-warning/30 px-4 py-2.5 text-[13px] text-warning transition-colors hover:bg-hover"
+          >
+            <span className="min-w-0 flex-1 truncate">{inbox} 筆同步或匯入的紀錄等你確認，確認後才會記進帳本</span>
+            <span className="shrink-0 text-[12px] text-fg-3">交易紀錄 →</span>
+          </Link>
+        )}
+
         <Card>
           <CardHeader title="通知" />
           <dl className="grid grid-cols-1 gap-x-6 gap-y-3 px-4 py-4 text-[13px] md:grid-cols-3">
@@ -315,6 +362,18 @@ export default function StatusPage() {
               <dt className="text-[12px] text-fg-3">期貨風險指標門檻</dt>
               <dd className="num text-fg-2">
                 {risk.warning}% 警示 · {risk.urgent}% 緊急
+              </dd>
+            </div>
+            <div className="flex flex-col gap-1">
+              <dt className="text-[12px] text-fg-3">Bybit 距強平</dt>
+              <dd className="num text-fg-2">
+                &lt; {liquidation.distance.warning}% 警示 · &lt; {liquidation.distance.urgent}% 緊急
+              </dd>
+            </div>
+            <div className="flex flex-col gap-1">
+              <dt className="text-[12px] text-fg-3">Bybit 維持保證金率</dt>
+              <dd className="num text-fg-2">
+                ≥ {liquidation.marginRate.warning}% 警示 · ≥ {liquidation.marginRate.urgent}% 緊急
               </dd>
             </div>
           </dl>

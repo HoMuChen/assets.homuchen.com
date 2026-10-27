@@ -1,7 +1,8 @@
 import cron from "node-cron";
+import { bybitConfigured, syncBybit } from "./bybit";
 import { sendDigest } from "./digest";
 import { tracked } from "./jobs";
-import { checkSinopacSync, checkTwFuturesRisk, runChecks } from "./monitor";
+import { checkBybitRisk, checkSinopacSync, checkTwFuturesRisk, runChecks } from "./monitor";
 import { refreshPrices } from "./prices";
 import { pruneAuthTables } from "./session";
 import { hasSnapshot, takeSnapshot } from "./snapshot";
@@ -24,6 +25,13 @@ async function watchMargin() {
   await checkSinopacSync();
 }
 
+async function watchBybit() {
+  if (!bybitConfigured()) return;
+  const full = new Date().getMinutes() % 10 === 0;
+  const r = await syncBybit(full ? "full" : "balances");
+  if (r.synced) await checkBybitRisk();
+}
+
 export function startScheduler() {
   if (g.__assetsScheduler) return;
   g.__assetsScheduler = true;
@@ -42,6 +50,9 @@ export function startScheduler() {
   // TAIFEX margin watch: while futures trade, sync SinoPac every 3 minutes and check the risk indicator
   // straight away, rather than waiting for the 5-minute quote cycle.
   cron.schedule("*/3 * * * *", () => watchMargin().catch(log("margin watch")), { timezone: TZ });
+  // Bybit trades around the clock: balances, positions and liquidation prices every minute, checked straight
+  // away; every 10 minutes also fills, transfers and the reconciliation (src/lib/bybit.ts).
+  cron.schedule("* * * * *", () => watchBybit().catch(log("bybit watch")), { timezone: TZ });
   // Daily snapshot near end of day, so it captures the day's close and late crypto moves.
   cron.schedule("55 23 * * *", () => dailySnapshot().catch(log("daily snapshot")), { timezone: TZ });
 

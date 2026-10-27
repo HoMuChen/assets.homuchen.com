@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mockFetch, mockTelegram, resetDb } from "@/test/helpers";
+import { holding, mockFetch, mockTelegram, resetDb } from "@/test/helpers";
 import {
+  acceptInbox,
   deleteItem,
+  dismissInbox,
+  importBrokerCsv,
   login,
+  previewBrokerCsv,
   saveAccount,
   saveCash,
+  saveFuturesAccount,
   saveFuturesPosition,
   saveProperty,
   saveTransaction,
@@ -13,10 +18,11 @@ import {
   setLedgerMode,
   snapshotNow,
 } from "./actions";
-import { db } from "./db";
+import { db, type InboxItem } from "./db";
+import { addRecord } from "./inbox";
 import { getRuns, recordRun } from "./jobs";
 import { compareWithLedger } from "./legacy";
-import { ledgerMode } from "./ledger";
+import { ledgerMode, seriesAt } from "./ledger";
 import { setSetting } from "./settings";
 import { SESSION_COOKIE } from "./session";
 
@@ -49,9 +55,10 @@ const form = (fields: Record<string, string | number>) => {
 };
 const all = (table: string) => db().prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[];
 
-/** Quote and lookup endpoints the actions hit after saving. */
-function mockMarketData() {
+/** Quote and lookup endpoints the actions hit after saving (and any others the test needs first). */
+function mockMarketData(extra: Parameters<typeof mockFetch>[0] = []) {
   return mockFetch([
+    ...extra,
     ["dataset=TaiwanStockInfo", () => Response.json({ status: 200, msg: "", data: [{ stock_id: "2330", stock_name: "台積電" }] })],
     ["taiwan_stock_tick_snapshot", () => Response.json({ status: 200, msg: "", data: [{ close: 1_000, change_rate: 0, date: "" }] })],
     [
@@ -267,5 +274,123 @@ describe("snapshotNow / sendTestNotification", () => {
     const tg = mockTelegram();
     expect(await sendTestNotification()).toEqual({ ok: true });
     expect(tg.texts()[0]).toContain("測試訊息");
+  });
+});
+
+// ---------- S3: Bybit, the inbox and broker files ----------
+
+/** A Bybit account holding 1,200 USDT and 0.5 BTC, nothing else going on. */
+function mockBybit() {
+  vi.stubEnv("BYBIT_API_KEY", "key");
+  vi.stubEnv("BYBIT_API_SECRET", "secret");
+  const ok = (result: unknown) => () => Response.json({ retCode: 0, retMsg: "OK", result });
+  return mockMarketData([
+    ["/v5/account/wallet-balance", ok({ list: [{ accountMMRate: "0.05", coin: [{ coin: "USDT", walletBalance: "1200" }, { coin: "BTC", walletBalance: "0.5" }] }] })],
+    ["/v5/asset/transfer/query-account-coins-balance", ok({ balance: [] })],
+    ["/v5/position/list", ok({ list: [] })],
+    ["/v5/account/transaction-log", ok({ list: [] })],
+    ["/v5/execution/list", ok({ list: [] })],
+    ["/v5/asset/", ok({ rows: [] })],
+  ]);
+}
+
+describe("saveFuturesAccount", () => {
+  it("needs a wallet balance when manual, and the API keys for Bybit", async () => {
+    mockMarketData();
+    expect(await saveFuturesAccount(null, form({ name: "Binance", source: "manual" }))).toMatchObject({ ok: false, error: expect.stringContaining("必填") });
+    expect(await saveFuturesAccount(null, form({ name: "Bybit", source: "bybit" }))).toMatchObject({ ok: false, error: expect.stringContaining("BYBIT_API_KEY") });
+    expect(await saveFuturesAccount(null, form({ name: "Binance", source: "manual", wallet_balance: "1,000" }))).toEqual({ ok: true });
+    expect(all("futures_accounts")).toMatchObject([{ name: "Binance", source: "manual", wallet_balance: 1000 }]);
+  });
+
+  it("links one account to Bybit and syncs it straight away; switching back to manual keeps the last numbers", async () => {
+    mockBybit();
+    expect(await saveFuturesAccount(null, form({ name: "Bybit UTA", source: "bybit" }))).toEqual({ ok: true });
+    const [fa] = all("futures_accounts");
+    expect(fa).toMatchObject({ source: "bybit", wallet_balance: 1200, margin_rate: 5, account_id: expect.any(Number) });
+    expect(all("accounts")).toMatchObject([{ kind: "futures", name: "Bybit UTA", currency: "USDT" }]);
+    expect(await saveFuturesAccount(null, form({ name: "Another", source: "bybit" }))).toMatchObject({ ok: false, error: expect.stringContaining("已經有另一個") });
+
+    expect(await saveFuturesAccount(null, form({ id: fa.id as number, name: "UTA", source: "manual", wallet_balance: 1200 }))).toEqual({ ok: true });
+    expect(all("futures_accounts")[0]).toMatchObject({ source: "manual", sync_error: null });
+    expect(all("accounts")[0]).toMatchObject({ name: "UTA" });
+  });
+});
+
+describe("saveAccount (Bybit spot)", () => {
+  it("links a crypto account to Bybit only with the keys, and unlinking forgets what the sync reported", async () => {
+    mockMarketData();
+    const id = holding("crypto:bitcoin", 0.4, 1, { account: "Bybit 現貨", symbol: "BTC" });
+    const link = (source: string) => saveAccount(null, form({ id, name: "Bybit 現貨", source }));
+    expect(await link("bybit")).toMatchObject({ ok: false, error: expect.stringContaining("BYBIT_API_KEY") });
+
+    mockBybit();
+    expect(await link("bybit")).toEqual({ ok: true });
+    // Bybit holds 0.5 BTC against the ledger's 0.4, and (no futures account linked) USDT as spot: reported, to be confirmed.
+    expect(all("inbox").map((r) => [r.kind, r.asset, r.observed])).toEqual([
+      ["diff", "crypto:tether", 1200],
+      ["diff", "crypto:bitcoin", 0.5],
+    ]);
+
+    expect(await link("manual")).toEqual({ ok: true });
+    expect(all("inbox")).toEqual([]);
+    expect(all("accounts")[0]).toMatchObject({ source: "manual" });
+  });
+});
+
+describe("acceptInbox / dismissInbox", () => {
+  it("confirms an item as edited in its dialog, or sets it aside", async () => {
+    const accountId = holding("crypto:bitcoin", 1, 1_000_000, { account: "Bybit", date: "2026-10-01" });
+    const add = (key: string) =>
+      addRecord({ key, accountId, asset: "crypto:bitcoin", source: "bybit", date: "2026-10-20", type: "deposit", quantity: 0.5, price: 2_000_000, amount: 0, title: "收到 0.5 BTC" });
+    add("bybit:deposit:1");
+    add("bybit:deposit:2");
+    const [first, second] = all("inbox") as InboxItem[];
+
+    expect(await acceptInbox(null, form({ id: first.id, type: "deposit", date: "2026/10/20", quantity: 0.5 }))).toMatchObject({ ok: false, error: expect.stringContaining("YYYY-MM-DD") });
+    expect(await acceptInbox(null, form({ id: first.id, type: "deposit", date: "2026-10-20", quantity: 0.5, price: -1 }))).toMatchObject({ ok: false });
+    expect(await acceptInbox(null, form({ id: first.id, type: "deposit", date: "2026-10-20", quantity: 0.5, price: "1,800,000", note: "冷錢包" }))).toEqual({ ok: true });
+    expect(seriesAt(accountId, "crypto:bitcoin", "2026-10-31")).toEqual({ quantity: 1.5, cost: 1_900_000 });
+
+    expect(await dismissInbox(second.id)).toEqual({ ok: true });
+    expect(all("inbox")).toMatchObject([{ id: second.id, status: "dismissed" }]);
+  });
+});
+
+describe("previewBrokerCsv / importBrokerCsv", () => {
+  const TRADES = "成交日期,股票代號,股票名稱,買賣別,成交股數,成交價,手續費,交易稅\n2026-10-20,2330,台積電,買進,1000,1000,1425,0\n2026-10-21,2330,台積電,賣出,1000,1100,1567,3300";
+  const upload = (text: string | Uint8Array<ArrayBuffer>, fields: Record<string, string | number> = {}) => {
+    const fd = form({ account: "國泰", date: "2026-10-27", ...fields });
+    fd.set("file", new File([text], "export.csv", { type: "text/csv" }));
+    return fd;
+  };
+
+  it("checks the file before reading it", async () => {
+    expect(await previewBrokerCsv(form({ account: "國泰" }))).toEqual({ ok: false, error: "請選擇檔案" });
+    expect(await previewBrokerCsv(upload("x".repeat(1_000_000)))).toMatchObject({ ok: false, error: expect.stringContaining("900 KB") });
+    expect(await previewBrokerCsv(upload(TRADES, { account: " " }))).toMatchObject({ ok: false, error: expect.stringContaining("必填") });
+    expect(await previewBrokerCsv(upload(TRADES, { date: "10/27" }))).toMatchObject({ ok: false });
+    expect(await previewBrokerCsv(upload("日期,金額\n2026-10-20,1"))).toMatchObject({ ok: false, error: expect.stringContaining("認不出欄位") });
+  });
+
+  it("previews a trades file, then imports the chosen rows", async () => {
+    mockMarketData();
+    const p = await previewBrokerCsv(upload(TRADES));
+    expect(p).toMatchObject({ ok: true, preview: { kind: "trades", account: "國泰", rows: [{ line: 2, status: "new" }, { line: 3, status: "new" }] } });
+
+    const fd = upload(TRADES, { kind: "trades" });
+    fd.append("line", "2");
+    expect(await importBrokerCsv(fd)).toEqual({ ok: true, result: { added: 1, skipped: 1, failed: [] } });
+    expect(all("transactions")).toMatchObject([{ type: "buy", source: "import", quantity: 1000 }]);
+  });
+
+  it("reads a Big5 holdings statement into the inbox", async () => {
+    mockMarketData();
+    // 股票代號,庫存股數 / 2330,1000 in Big5
+    const big5 = Uint8Array.from([0xaa, 0xd1, 0xb2, 0xbc, 0xa5, 0x4e, 0xb8, 0xb9, 0x2c, 0xae, 0x77, 0xa6, 0x73, 0xaa, 0xd1, 0xbc, 0xc6, 0x0a, ...new TextEncoder().encode("2330,1000")]);
+    const p = await previewBrokerCsv(upload(big5));
+    expect(p).toMatchObject({ ok: true, preview: { kind: "holdings", rows: [{ symbol: "2330", quantity: 1000, ledger: 0, diff: 1000 }] } });
+    expect(await importBrokerCsv(upload(big5, { kind: "holdings" }))).toMatchObject({ ok: true, result: { reported: 1 } });
+    expect(all("inbox")).toMatchObject([{ kind: "diff", asset: "tw:2330", source: "import", observed: 1000 }]);
   });
 });

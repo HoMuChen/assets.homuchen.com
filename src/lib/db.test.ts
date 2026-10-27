@@ -15,7 +15,15 @@ describe("schema migrations", () => {
 
   it("brings a new database to the latest version", () => {
     expect(db().pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION);
-    expect(tables(db())).toEqual(expect.arrayContaining(["snapshots", "prices", "sessions", "job_runs", "alerts"]));
+    expect(tables(db())).toEqual(expect.arrayContaining(["snapshots", "prices", "sessions", "job_runs", "alerts", "inbox"]));
+    expect(columns(db(), "futures_accounts")).toEqual(expect.arrayContaining(["source", "account_id", "fund_balance", "margin_rate", "synced_at", "sync_error"]));
+    expect(columns(db(), "futures_positions")).toEqual(expect.arrayContaining(["mark_price", "liq_price", "upnl"]));
+  });
+
+  it("keeps existing futures accounts manual", () => {
+    resetDb();
+    db().prepare("INSERT INTO futures_accounts (name, wallet_balance) VALUES ('Binance', 100)").run();
+    expect(db().prepare("SELECT source, account_id FROM futures_accounts").get()).toEqual({ source: "manual", account_id: null });
   });
 
   it("adopts a database from before versioning without losing data", () => {

@@ -3,7 +3,19 @@ import { at, cashAccount, holding, insert, resetDb, setPrice } from "@/test/help
 import { activeAlerts } from "./alerts";
 import { db } from "./db";
 import { recordRun } from "./jobs";
-import { checkHeartbeats, checkLedger, checkQuotes, checkSinopacSync, checkSnapshot, checkTwFuturesRisk, ledgerTrial, runChecks } from "./monitor";
+import {
+  checkBybitRisk,
+  checkBybitSync,
+  checkHeartbeats,
+  checkLedger,
+  checkQuotes,
+  checkSinopacSync,
+  checkSnapshot,
+  checkTwFuturesRisk,
+  ledgerTrial,
+  liquidationDistance,
+  runChecks,
+} from "./monitor";
 import { setSetting } from "./settings";
 
 beforeEach(resetDb);
@@ -107,6 +119,115 @@ describe("checkSinopacSync", () => {
     insert("tw_futures_accounts", { name: "永豐期貨", source: "sinopac", sync_error: "x" });
     await checkSinopacSync(SUNDAY);
     expect(activeAlerts()).toEqual([]);
+  });
+});
+
+describe("checkBybitRisk", () => {
+  const NOW = at("2026-10-27 12:00");
+  const MIN = 60_000;
+  const account = (fields: Record<string, unknown> = {}) =>
+    insert("futures_accounts", { name: "Bybit UTA", source: "bybit", wallet_balance: 1000, margin_rate: 10, synced_at: new Date(NOW.getTime() - MIN).toISOString(), ...fields });
+  const position = (accountId: number, fields: Record<string, unknown> = {}) =>
+    insert("futures_positions", { account_id: accountId, coin_id: "bitcoin", symbol: "BTC", side: "long", quantity: 0.1, entry_price: 60_000, mark_price: 65_000, liq_price: 50_000, ...fields });
+  const setLiq = (id: number, liq: number) => db().prepare("UPDATE futures_positions SET liq_price = ? WHERE id = ?").run(liq, id);
+  const setRate = (id: number, rate: number) => db().prepare("UPDATE futures_accounts SET margin_rate = ? WHERE id = ?").run(rate, id);
+
+  it("measures the distance against the position's side", () => {
+    expect(liquidationDistance({ side: "long", mark_price: 100, liq_price: 90 })).toBeCloseTo(10);
+    expect(liquidationDistance({ side: "short", mark_price: 100, liq_price: 120 })).toBeCloseTo(20);
+    expect(liquidationDistance({ side: "long", mark_price: 100, liq_price: null })).toBeNull();
+  });
+
+  it("warns within 15% of liquidation, escalates within 7%, and clears 3 points past the line", async () => {
+    const a = account();
+    const p = position(a);
+    await checkBybitRisk(NOW);
+    expect(activeAlerts()).toEqual([]);
+
+    setLiq(p, 56_000); // 13.8%
+    await checkBybitRisk(NOW);
+    const key = `liq:${a}:BTC:long`;
+    expect(open()[key]).toMatchObject({ level: "warning", title: "Bybit UTA BTC 多單接近強平" });
+    expect(open()[key].detail).toContain("距離 13.8%");
+
+    setLiq(p, 61_000); // 6.2%
+    await checkBybitRisk(NOW);
+    expect(open()[key].level).toBe("urgent");
+
+    setLiq(p, 54_000); // 16.9%: past 15 but inside the band
+    await checkBybitRisk(NOW);
+    expect(open()[key].level).toBe("warning");
+
+    setLiq(p, 50_000);
+    await checkBybitRisk(NOW);
+    expect(activeAlerts()).toEqual([]);
+  });
+
+  it("watches the account's maintenance margin rate", async () => {
+    const a = account({ margin_rate: 55 });
+    await checkBybitRisk(NOW);
+    expect(open()[`mmr:${a}`]).toMatchObject({ level: "warning", title: "Bybit UTA 保證金率偏高" });
+    setRate(a, 80);
+    await checkBybitRisk(NOW);
+    expect(open()[`mmr:${a}`].level).toBe("urgent");
+    setRate(a, 47);
+    await checkBybitRisk(NOW);
+    expect(open()[`mmr:${a}`].level).toBe("warning");
+    setRate(a, 40);
+    await checkBybitRisk(NOW);
+    expect(activeAlerts()).toEqual([]);
+  });
+
+  it("keeps what is open while the readings are stale, and clears a closed position's alert", async () => {
+    const a = account();
+    const p = position(a, { liq_price: 60_000 });
+    await checkBybitRisk(NOW);
+    expect(activeAlerts()).toHaveLength(1);
+
+    setLiq(p, 40_000);
+    db().prepare("UPDATE futures_accounts SET synced_at = ? WHERE id = ?").run(new Date(NOW.getTime() - 20 * MIN).toISOString(), a);
+    await checkBybitRisk(NOW);
+    expect(activeAlerts()).toHaveLength(1);
+
+    db().prepare("UPDATE futures_accounts SET synced_at = ? WHERE id = ?").run(NOW.toISOString(), a);
+    db().prepare("DELETE FROM futures_positions").run();
+    await checkBybitRisk(NOW);
+    expect(activeAlerts()).toEqual([]);
+  });
+
+  it("honours thresholds from the environment, and leaves manual accounts alone", async () => {
+    vi.stubEnv("ALERT_LIQ_WARN", "30");
+    const a = account();
+    position(a); // 23%
+    position(insert("futures_accounts", { name: "手動", wallet_balance: 1, margin_rate: 99 }), { liq_price: 64_000 });
+    await checkBybitRisk(NOW);
+    expect(Object.keys(open())).toEqual([`liq:${a}:BTC:long`]);
+  });
+});
+
+describe("checkBybitSync", () => {
+  const NOW = at("2026-10-27 12:00");
+  const ago = (min: number) => new Date(NOW.getTime() - min * 60_000);
+
+  it("alerts once syncs have failed for 15 minutes, and only when Bybit is set up and linked", async () => {
+    insert("futures_accounts", { name: "Bybit UTA", source: "bybit" });
+    recordRun("sync:bybit", null, ago(20));
+    recordRun("sync:bybit", "Bybit API：timeout", ago(1));
+    await checkBybitSync(NOW);
+    expect(activeAlerts()).toEqual([]); // no key: local dev
+
+    vi.stubEnv("BYBIT_API_KEY", "k");
+    vi.stubEnv("BYBIT_API_SECRET", "s");
+    await checkBybitSync(NOW);
+    expect(open()["sync:bybit"].detail).toContain("timeout");
+
+    recordRun("sync:bybit", null, NOW);
+    await checkBybitSync(NOW);
+    expect(activeAlerts()).toEqual([]);
+
+    recordRun("sync:bybit", "Bybit API：timeout", NOW);
+    await checkBybitSync(new Date(NOW.getTime() + 5 * 60_000));
+    expect(activeAlerts()).toEqual([]); // a blip
   });
 });
 

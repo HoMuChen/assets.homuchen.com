@@ -128,6 +128,24 @@ function saveQuotes(quotes: Quote[]) {
   db().transaction(() => quotes.forEach((q) => stmt.run({ ...q, fetchedAt })))();
 }
 
+/**
+ * TWD price per coin for these CoinGecko ids, fetching any not quoted in the last 10 minutes (a sync converting
+ * a fill needs coins nobody holds yet, e.g. the quote coin). Ids CoinGecko doesn't know are left out.
+ */
+export async function coinPricesTwd(coinIds: string[]): Promise<Map<string, number>> {
+  const cached = getPriceMap();
+  const wanted = [...new Set(coinIds)].filter((id) => isStale(cached.get(`crypto:${id}`), 10 * 60_000));
+  if (wanted.length) {
+    try {
+      saveQuotes(await fetchCrypto(wanted));
+    } catch (e) {
+      console.warn("[prices] coin quotes failed:", (e as Error).message);
+    }
+  }
+  const prices = getPriceMap();
+  return new Map(coinIds.flatMap((id) => (prices.has(`crypto:${id}`) ? [[id, prices.get(`crypto:${id}`)!.price] as const] : [])));
+}
+
 export function getPriceMap(): Map<string, PriceRow> {
   const rows = db().prepare("SELECT * FROM prices").all() as PriceRow[];
   return new Map(rows.map((r) => [r.key, r]));

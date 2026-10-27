@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { cashAccount, holding, resetDb, tx } from "@/test/helpers";
-import type { Transaction, TxType } from "./db";
-import { ledgerCash, ledgerHoldings, ledgerIncome, listTransactions, replay } from "./ledger";
+import { db, type Transaction, type TxType } from "./db";
+import { ledgerCash, ledgerFuturesIncome, ledgerHoldings, ledgerIncome, listTransactions, replay, seriesAt } from "./ledger";
 import { accountByName, addTransaction } from "./transactions";
 
 let nextId = 1;
@@ -53,6 +53,12 @@ describe("replay", () => {
     ]);
     expect(s).toMatchObject({ quantity: 2_000, cost: 50_000 });
     expect(s.dividends).toEqual([{ date: "2026-07-01", amount: 2_000 }]);
+  });
+
+  it("costs coins deposited or transferred in at their price, leaving it unknown without one", () => {
+    expect(replay([t("open", "2026-01-01", 1, { price: 100 }), t("deposit", "2026-02-01", 1, { price: 300 })])).toMatchObject({ quantity: 2, cost: 400 });
+    expect(replay([t("open", "2026-01-01", 1, { price: 100 }), t("transfer", "2026-02-01", 1, { price: 200 })])).toMatchObject({ quantity: 2, cost: 300 });
+    expect(replay([t("open", "2026-01-01", 1, { price: 100 }), t("deposit", "2026-02-01", 1)]).cost).toBeNull();
   });
 
   it("takes cost out proportionally when an adjustment removes units, without realizing anything", () => {
@@ -121,5 +127,29 @@ describe("ledger reads", () => {
     expect(listTransactions({ accountId: a, type: "buy" })).toMatchObject([{ account_name: "國泰", account_kind: "stock", symbol: "2330" }]);
     expect(listTransactions({ asset: "tw:2330", limit: 1 })).toHaveLength(1);
     expect(accountByName("stock", "國泰").id).toBe(a);
+  });
+
+  it("reads one series as of a date: units and cost, or a cash-like balance", () => {
+    const a = holding("tw:2330", 1_000, 500, { date: "2026-01-02" });
+    addTransaction(tx("buy", a, "tw:2330", 1_000, 700, "2026-03-01"));
+    expect(seriesAt(a, "tw:2330", "2026-02-01")).toEqual({ quantity: 1_000, cost: 500_000 });
+    expect(seriesAt(a, "tw:2330", "2026-03-01")).toEqual({ quantity: 2_000, cost: 1_200_000 });
+    const c = cashAccount("薪轉", 100);
+    expect(seriesAt(c, null, "2099-01-01")).toEqual({ quantity: 100, cost: null });
+  });
+
+  it("adds up a year of the synced futures wallets' PnL, fees and funding", () => {
+    const id = Number(
+      db().prepare("INSERT INTO accounts (kind, name, currency, source, created_at, updated_at) VALUES ('futures', 'UTA', 'USDT', 'bybit', '', '')").run()
+        .lastInsertRowid,
+    );
+    const cash = (type: TxType, date: string, amount: number) => addTransaction({ ...tx(type, id, null, 0, null, date), amount });
+    cash("open", "2025-12-31", 1_000);
+    cash("pnl", "2025-12-31", 99);
+    cash("pnl", "2026-03-01", 120);
+    cash("fee", "2026-03-01", -5);
+    cash("funding", "2026-04-01", -2);
+    cash("deposit", "2026-04-01", 500);
+    expect(ledgerFuturesIncome("2026")).toBe(113);
   });
 });

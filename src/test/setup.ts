@@ -19,6 +19,13 @@ for (const k of [
   "HEARTBEAT_TOKEN",
   "ALERT_TW_RISK_WARN",
   "ALERT_TW_RISK_URGENT",
+  "BYBIT_API_KEY",
+  "BYBIT_API_SECRET",
+  "BYBIT_BASE_URL",
+  "ALERT_LIQ_WARN",
+  "ALERT_LIQ_URGENT",
+  "ALERT_MMR_WARN",
+  "ALERT_MMR_URGENT",
 ]) {
   delete process.env[k];
 }

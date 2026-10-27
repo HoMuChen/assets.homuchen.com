@@ -73,7 +73,7 @@ export function FormDialog({
         <button
           type="button"
           onClick={open}
-          className="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-accent-hover"
+          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-accent px-2.5 text-[12px] font-medium whitespace-nowrap text-white transition-colors hover:bg-accent-hover"
         >
           <IconPlus width={14} height={14} />
           {triggerLabel ?? "新增"}
@@ -82,7 +82,7 @@ export function FormDialog({
         <button
           type="button"
           onClick={open}
-          className="inline-flex h-6 items-center gap-1 rounded-md border border-line-strong px-2 text-[12px] text-fg-2 transition-colors hover:bg-hover"
+          className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-line-strong px-2 text-[12px] whitespace-nowrap text-fg-2 transition-colors hover:bg-hover"
         >
           <IconPlus width={12} height={12} />
           {triggerLabel ?? "新增"}
@@ -95,8 +95,8 @@ export function FormDialog({
 
       <dialog
         ref={ref}
-        // Edit triggers sit in right-aligned table cells; do not inherit that alignment into the form.
-        className="m-auto w-[min(560px,calc(100vw-32px))] rounded-xl border border-line-strong bg-panel p-0 text-left shadow-2xl"
+        // Edit triggers sit in right-aligned, non-wrapping table cells; do not inherit either into the form.
+        className="m-auto w-[min(560px,calc(100vw-32px))] rounded-xl border border-line-strong bg-panel p-0 text-left whitespace-normal shadow-2xl"
         onClick={(e) => e.target === ref.current && ref.current?.close()}
       >
         <form key={openKey} ref={formRef} action={formAction} onSubmit={() => setSubmittedKey(openKey)}>

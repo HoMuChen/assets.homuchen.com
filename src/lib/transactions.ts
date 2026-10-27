@@ -2,7 +2,7 @@
 
 import { db, type Account, type AccountKind, type Transaction, type TxType } from "./db";
 import { applyToLegacy, syncLegacy } from "./legacy";
-import { getAccount, getTransaction, instruments, replay, seriesTx } from "./ledger";
+import { getAccount, getTransaction, instruments, QTY_EPS, replay, seriesAt, seriesTx } from "./ledger";
 import { taipeiDate } from "./time";
 
 /** A rule the ledger enforces; its message is shown to the user as is. */
@@ -35,7 +35,9 @@ function checkSeries(asset: string | null, txs: Transaction[]) {
 function checkInput(input: TxInput, account: Account, now: Date) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) throw new LedgerError("日期格式 YYYY-MM-DD");
   if (input.date > taipeiDate(now)) throw new LedgerError("日期不能晚於今天");
-  if ((account.kind === "cash") !== (input.asset == null)) throw new LedgerError("這個帳戶不能記這種交易");
+  // Cash and futures wallets hold one balance (asset NULL); brokers and exchanges hold assets.
+  const cashLike = account.kind === "cash" || account.kind === "futures";
+  if (cashLike !== (input.asset == null)) throw new LedgerError("這個帳戶不能記這種交易");
 }
 
 const draft = (input: TxInput, id: number): Transaction => ({
@@ -68,6 +70,8 @@ function mustAccount(id: number): Account {
  */
 export function addTransaction(input: TxInput, now = new Date()): number | null {
   return db().transaction(() => {
+    // Checked before the series: replaying a sell that is already in would see it twice.
+    if (input.externalId != null && recorded(input.source ?? "manual", input.externalId)) return null;
     const account = mustAccount(input.accountId);
     checkInput(input, account, now);
     const series = seriesTx(account.id, input.asset);
@@ -87,6 +91,11 @@ export function addTransaction(input: TxInput, now = new Date()): number | null 
     else applyToLegacy(getTransaction(id)!);
     return id;
   })();
+}
+
+/** A transaction with this id at this source is already in the ledger. */
+export function recorded(source: string, externalId: string): boolean {
+  return !!db().prepare("SELECT 1 FROM transactions WHERE source = ? AND external_id = ?").get(source, externalId);
 }
 
 function editable(id: number): Transaction {
@@ -126,6 +135,34 @@ export function deleteTransaction(id: number) {
   })();
 }
 
+/**
+ * Move units between two of your own accounts of the same kind (a broker transfer, coins to an exchange),
+ * keeping their cost: the receiving side takes the sender's average cost as of that date. The receiving
+ * side carries `source` / `externalId` when it comes from a sync. Returns the receiving transaction's id.
+ */
+export function transferAsset(
+  v: { fromId: number; toId: number; asset: string; quantity: number; date: string; note: string | null; source?: string; externalId?: string | null },
+  now = new Date(),
+): number | null {
+  return db().transaction(() => {
+    const from = mustAccount(v.fromId);
+    const to = mustAccount(v.toId);
+    if (from.id === to.id) throw new LedgerError("轉出和轉入不能是同一個帳戶");
+    if (from.kind !== to.kind || (from.kind !== "stock" && from.kind !== "crypto")) throw new LedgerError("只能在同類型的券商或交易所帳戶之間轉移");
+    if (!(v.quantity > 0)) throw new LedgerError("轉移數量必須大於 0");
+    const held = seriesAt(from.id, v.asset, v.date);
+    const price = held.cost == null || held.quantity <= QTY_EPS ? null : held.cost / held.quantity;
+    const base = { date: v.date, type: "transfer" as const, asset: v.asset, amount: 0, fee: 0, tax: 0 };
+    const id = addTransaction(
+      { ...base, accountId: to.id, quantity: v.quantity, price, note: v.note ?? `從 ${from.name} 轉入`, source: v.source, externalId: v.externalId },
+      now,
+    );
+    if (id == null) return null;
+    addTransaction({ ...base, accountId: from.id, quantity: -v.quantity, price: null, note: `轉到 ${to.name}` }, now);
+    return id;
+  })();
+}
+
 // ---------- accounts ----------
 
 /** The account of this kind with this name, created if there is none (the forms take a typed name). */
@@ -141,7 +178,7 @@ export function accountByName(kind: Exclude<AccountKind, "cash">, name: string, 
 
 export function updateAccount(
   id: number,
-  v: { name: string; institution: string | null; feeDiscount: number | null; note: string | null },
+  v: { name: string; institution: string | null; feeDiscount: number | null; note: string | null; source?: string },
   now = new Date(),
 ) {
   db().transaction(() => {
@@ -151,8 +188,8 @@ export function updateAccount(
       if (clash) throw new LedgerError(`已經有叫「${v.name}」的帳戶`);
     }
     db()
-      .prepare("UPDATE accounts SET name=?, institution=?, fee_discount=?, note=?, updated_at=? WHERE id=?")
-      .run(v.name, v.institution, v.feeDiscount, v.note, now.toISOString(), id);
+      .prepare("UPDATE accounts SET name=?, institution=?, fee_discount=?, note=?, source=?, updated_at=? WHERE id=?")
+      .run(v.name, v.institution, v.feeDiscount, v.note, v.source ?? account.source, now.toISOString(), id);
     // The old tables label rows by broker / location name.
     if (account.kind === "stock") db().prepare("UPDATE stock_holdings SET broker = ? WHERE account_id = ?").run(v.name, id);
     if (account.kind === "crypto") db().prepare("UPDATE crypto_holdings SET location = ? WHERE account_id = ?").run(v.name, id);
@@ -164,6 +201,8 @@ export function deleteAccount(id: number) {
   db().transaction(() => {
     db().prepare("DELETE FROM accounts WHERE id = ?").run(id);
     for (const t of ["cash_accounts", "stock_holdings", "crypto_holdings"]) db().prepare(`DELETE FROM ${t} WHERE account_id = ?`).run(id);
+    // A synced futures wallet starts a new ledger account at its next sync.
+    db().prepare("UPDATE futures_accounts SET account_id = NULL WHERE account_id = ?").run(id);
   })();
 }
 

@@ -32,7 +32,7 @@ export type StockPosition = Holding & { avgCost: number | null; position: Positi
 export type CryptoPosition = Holding & { coinId: string; avgCost: number | null; position: Position };
 export type CashPosition = CashBalance & { position: Position; fxRate: number | null };
 export type FuturesPositionView = FuturesPosition & {
-  /** Mark price in USDT (CoinGecko USD price ÷ USDT's USD price). */
+  /** Mark price in USDT: the exchange's when synced, else CoinGecko's USD price ÷ USDT's USD price. */
   markUsdt: number | null;
   notionalUsdt: number;
   upnlUsdt: number;
@@ -184,10 +184,11 @@ export function getPortfolio(): Portfolio {
       .filter((fp) => fp.account_id === a.id)
       .map((fp): FuturesPositionView => {
         const q = prices.get(`crypto_usd:${fp.coin_id}`);
-        if (!q) missing.push(`${fp.symbol} 合約`);
-        const mark = q ? q.price / usdtUsd : null;
+        // A synced position carries the exchange's own mark price and PnL; CoinGecko only adds the 24h move.
+        if (!q && fp.mark_price == null) missing.push(`${fp.symbol} 合約`);
+        const mark = fp.mark_price ?? (q ? q.price / usdtUsd : null);
         const dir = fp.side === "long" ? 1 : -1;
-        const upnl = mark != null ? dir * fp.quantity * (mark - fp.entry_price) : 0;
+        const upnl = fp.upnl ?? (mark != null ? dir * fp.quantity * (mark - fp.entry_price) : 0);
         const priceMovePct = mark != null ? ((dir * (mark - fp.entry_price)) / fp.entry_price) * 100 : null;
         const dayMove = mark != null && q?.change_pct != null ? mark - mark / (1 + q.change_pct / 100) : null;
         return {
@@ -216,7 +217,7 @@ export function getPortfolio(): Portfolio {
         category: "crypto" as const,
         key: `futures:${a.id}`,
         name: a.name,
-        detail: `合約 · ${positions.length} 個部位`,
+        detail: `合約 · ${positions.length} 個部位${a.source === "bybit" ? " · Bybit 同步" : ""}`,
         valueTwd: equityUsdt * rate,
         costTwd: null,
         dayChangeTwd: positions.length ? dayUsdt * rate : null,

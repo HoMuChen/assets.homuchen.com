@@ -1,6 +1,7 @@
 import { activeAlerts } from "./alerts";
 import { db, type SnapshotRow } from "./db";
 import { fmtPct, fmtTwd } from "./format";
+import { openCount } from "./inbox";
 import { sendTelegram } from "./telegram";
 
 /**
@@ -28,7 +29,7 @@ const mmdd = (date: string) => date.slice(5).replace("-", "/");
 const arrow = (n: number) => (n > 0 ? "▲" : n < 0 ? "▼" : "");
 const pctOf = (diff: number, base: number) => (base ? (diff / Math.abs(base)) * 100 : null);
 
-export function digestMessage(today: SnapshotRow, prev: SnapshotRow | undefined, mode: "pct" | "full", alertCount = 0): string {
+export function digestMessage(today: SnapshotRow, prev: SnapshotRow | undefined, mode: "pct" | "full", alertCount = 0, inboxCount = 0): string {
   const lines: string[] = [];
   if (!prev) {
     lines.push(mode === "full" ? `📊 ${mmdd(today.date)} 淨資產 ${fmtTwd(today.net_worth)}` : `📊 ${mmdd(today.date)} 已記錄快照`);
@@ -53,6 +54,7 @@ export function digestMessage(today: SnapshotRow, prev: SnapshotRow | undefined,
     if (moves.length) lines.push(moves.join("｜"));
   }
   if (alertCount > 0) lines.push(`⚠️ 目前有 ${alertCount} 個未解除的告警`);
+  if (inboxCount > 0) lines.push(`📥 ${inboxCount} 筆同步或匯入的紀錄等你確認`);
   return lines.join("\n");
 }
 
@@ -63,5 +65,5 @@ export async function sendDigest(today: SnapshotRow) {
   const prev = db().prepare("SELECT * FROM snapshots WHERE date < ? ORDER BY date DESC LIMIT 1").get(today.date) as
     | SnapshotRow
     | undefined;
-  await sendTelegram(digestMessage(today, prev, mode, activeAlerts().length), { silent: true });
+  await sendTelegram(digestMessage(today, prev, mode, activeAlerts().length, openCount()), { silent: true });
 }

@@ -26,6 +26,9 @@ describe("getStatus", () => {
     expect(s.snapshot).toBeNull();
     expect(s).toMatchObject({ telegram: false, heartbeats: false, digest: "full", risk: { warning: 150, urgent: 100 } });
     expect(s.ledger).toMatchObject({ mode: "shadow", checked: false, diffs: [] });
+    expect(s.bybit).toEqual({ configured: false, futures: null, spot: null, pendingFills: 0 });
+    expect(s.liquidation).toEqual({ distance: { warning: 15, urgent: 7 }, marginRate: { warning: 50, urgent: 75 } });
+    expect(s.inbox).toBe(0);
   });
 
   it("reports the health check as stale when it hasn't run for 15 minutes", () => {

@@ -65,7 +65,7 @@ export function Stat({ label, value, sub }: { label: string; value: ReactNode; s
 
 export function Badge({ children, tone = "default" }: { children: ReactNode; tone?: "default" | "warning" }) {
   const cls = tone === "warning" ? "border-warning/30 text-warning" : "border-line-strong text-fg-3";
-  return <span className={`inline-flex h-5 items-center rounded border px-1.5 text-[11px] ${cls}`}>{children}</span>;
+  return <span className={`inline-flex h-5 shrink-0 items-center rounded border px-1.5 text-[11px] whitespace-nowrap ${cls}`}>{children}</span>;
 }
 
 export function CategoryDot({ color }: { color: string }) {

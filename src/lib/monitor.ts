@@ -1,6 +1,7 @@
 import { activeAlerts, raiseAlert, resolveAlert, resolveOthers } from "./alerts";
-import { db, type JobRun, type TwFuturesAccount } from "./db";
-import { fmtPct, fmtTime, fmtTwd } from "./format";
+import { bybitConfigured } from "./bybit";
+import { db, type FuturesAccount, type FuturesPosition, type JobRun, type TwFuturesAccount } from "./db";
+import { fmtNum, fmtPct, fmtPrice, fmtTime, fmtTwd } from "./format";
 import { getRuns, isFailing, recordRun } from "./jobs";
 import { compareWithLedger } from "./legacy";
 import { ledgerMode } from "./ledger";
@@ -73,6 +74,79 @@ export async function checkSinopacSync(now = new Date()) {
     `${r.sync_error}\n最後成功：${fmtTime(r.synced_at)}${isTwFuturesOpen(now) ? "（盤中，權益數與風險指標不是最新）" : ""}`,
     now,
   );
+}
+
+/**
+ * Bybit liquidation watch. A position alerts when its mark price is within `warning`% of its liquidation price
+ * (urgent within `urgent`%); the account alerts when its maintenance margin rate reaches `warning`% (urgent at
+ * `urgent`%; Bybit liquidates at 100%). In cross margin the per-position liquidation price is Bybit's estimate.
+ */
+export function liquidationThresholds() {
+  return {
+    distance: { warning: envPct("ALERT_LIQ_WARN", 15), urgent: envPct("ALERT_LIQ_URGENT", 7) },
+    marginRate: { warning: envPct("ALERT_MMR_WARN", 50), urgent: envPct("ALERT_MMR_URGENT", 75) },
+  };
+}
+/** Readings older than this are left alone: the sync check reports a stalled sync instead. */
+const BYBIT_FRESH_MS = 10 * MIN;
+
+/** % of the mark price the market can move against the position before it is liquidated. */
+export function liquidationDistance(p: Pick<FuturesPosition, "side" | "mark_price" | "liq_price">): number | null {
+  if (!p.mark_price || !p.liq_price) return null;
+  return ((p.side === "long" ? p.mark_price - p.liq_price : p.liq_price - p.mark_price) / p.mark_price) * 100;
+}
+
+export async function checkBybitRisk(now = new Date()) {
+  const { distance, marginRate } = liquidationThresholds();
+  const open = new Set(activeAlerts().map((a) => a.key));
+  const flagged = new Set<string>();
+  const accounts = db().prepare("SELECT * FROM futures_accounts WHERE source = 'bybit' ORDER BY id").all() as FuturesAccount[];
+  for (const a of accounts) {
+    const fresh = !!a.synced_at && now.getTime() - Date.parse(a.synced_at) < BYBIT_FRESH_MS;
+    const positions = db().prepare("SELECT * FROM futures_positions WHERE account_id = ? ORDER BY id").all(a.id) as FuturesPosition[];
+    // Keep whatever is open while the readings are stale, rather than announcing a recovery nobody saw.
+    if (!fresh) {
+      for (const k of open) if (k.startsWith(`liq:${a.id}:`) || k === `mmr:${a.id}`) flagged.add(k);
+      continue;
+    }
+    const mmr = a.margin_rate != null ? `帳戶維持保證金率 ${fmtPct(a.margin_rate, false)}` : "";
+    for (const p of positions) {
+      const d = liquidationDistance(p);
+      const key = `liq:${a.id}:${p.symbol}:${p.side}`;
+      // Once open, clear only a few points past the threshold, so it doesn't flap.
+      if (d == null || d >= distance.warning + (open.has(key) ? 3 : 0)) continue;
+      flagged.add(key);
+      await raiseAlert(
+        key,
+        d < distance.urgent ? "urgent" : "warning",
+        `${a.name} ${p.symbol} ${p.side === "long" ? "多單" : "空單"}接近強平`,
+        `標記價 ${fmtPrice(p.mark_price)}、強平價 ${fmtPrice(p.liq_price)}，距離 ${fmtNum(d, 1)}%\n數量 ${fmtNum(p.quantity, 8)}${mmr ? `\n${mmr}` : ""}\n門檻：${distance.warning}% 警示、${distance.urgent}% 緊急`,
+        now,
+      );
+    }
+    const key = `mmr:${a.id}`;
+    if (a.margin_rate != null && a.margin_rate >= marginRate.warning - (open.has(key) ? 5 : 0)) {
+      flagged.add(key);
+      await raiseAlert(
+        key,
+        a.margin_rate >= marginRate.urgent ? "urgent" : "warning",
+        `${a.name} 保證金率偏高`,
+        `${mmr}（到 100% 會被強平）\n門檻：${marginRate.warning}% 警示、${marginRate.urgent}% 緊急`,
+        now,
+      );
+    }
+  }
+  await resolveOthers("liq:", flagged, now);
+  await resolveOthers("mmr:", flagged, now);
+}
+
+export async function checkBybitSync(now = new Date()) {
+  const run = getRuns().get("sync:bybit");
+  const linked = !!db().prepare("SELECT 1 FROM futures_accounts WHERE source = 'bybit' UNION SELECT 1 FROM accounts WHERE kind = 'crypto' AND source = 'bybit'").get();
+  // Syncs run every minute; a few failures in a row are a blip.
+  const lastOk = run?.last_ok_at ? Date.parse(run.last_ok_at) : startedAt;
+  if (!bybitConfigured() || !linked || !isFailing(run) || now.getTime() - lastOk < 15 * MIN) return resolveAlert("sync:bybit", now);
+  await raiseAlert("sync:bybit", "warning", "Bybit 同步失敗", `${run!.last_error}\n最後成功：${fmtTime(run!.last_ok_at)}（合約餘額、部位與強平價不是最新）`, now);
 }
 
 export type FeedStatus = {
@@ -209,6 +283,8 @@ export function ledgerTrial(now = new Date()) {
 const CHECKS: [string, (now: Date) => Promise<unknown>][] = [
   ["futures risk", checkTwFuturesRisk],
   ["sinopac sync", checkSinopacSync],
+  ["bybit risk", checkBybitRisk],
+  ["bybit sync", checkBybitSync],
   ["quotes", checkQuotes],
   ["snapshot", checkSnapshot],
   ["heartbeats", checkHeartbeats],

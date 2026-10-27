@@ -9,10 +9,12 @@ export const TX_LABEL: Record<TxType, string> = {
   dividend: "股利",
   deposit: "入金",
   withdraw: "出金",
+  transfer: "轉帳",
   fee: "費用",
   tax: "稅",
   adjust: "調整",
   funding: "資金費率",
+  pnl: "平倉損益",
 };
 
 /** 'tw:2330' → '2330', 'crypto:bitcoin' → 'bitcoin'. */

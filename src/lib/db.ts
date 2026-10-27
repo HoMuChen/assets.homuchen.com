@@ -248,6 +248,50 @@ const MIGRATIONS: ((conn: Database.Database) => void)[] = [
     for (const t of ["cash_accounts", "stock_holdings", "crypto_holdings"]) addColumn(conn, t, "account_id", "INTEGER");
     adoptLegacyRows(conn);
   },
+  // v4: Bybit sync (src/lib/bybit.ts) and the reconciliation inbox (src/lib/inbox.ts).
+  (conn) => {
+    // source 'bybit': wallet, positions and margin come from the exchange, and account_id is the ledger account
+    // ('futures' kind, in USDT) that records the wallet's transfers, realized PnL, fees and funding.
+    addColumn(conn, "futures_accounts", "source", "TEXT NOT NULL DEFAULT 'manual'");
+    addColumn(conn, "futures_accounts", "account_id", "INTEGER");
+    addColumn(conn, "futures_accounts", "fund_balance", "REAL"); // USDT in Bybit's Funding account, included in wallet_balance
+    addColumn(conn, "futures_accounts", "margin_rate", "REAL"); // maintenance margin ÷ margin balance, %; liquidation at 100
+    addColumn(conn, "futures_accounts", "synced_at", "TEXT");
+    addColumn(conn, "futures_accounts", "sync_error", "TEXT");
+    // As the exchange reports them; NULL on manual positions, whose mark and PnL are estimated from CoinGecko.
+    addColumn(conn, "futures_positions", "mark_price", "REAL");
+    addColumn(conn, "futures_positions", "liq_price", "REAL");
+    addColumn(conn, "futures_positions", "upnl", "REAL");
+    conn.exec(`
+      -- What a sync or an import found that the ledger doesn't have yet, waiting to be confirmed.
+      -- kind 'record': one record at the source (a deposit, a fill that didn't fit the ledger yet);
+      -- kind 'diff': a holding the source reports differently from the ledger.
+      -- An accepted item becomes a transaction and is deleted; a dismissed one stays, so it isn't raised again.
+      CREATE TABLE inbox (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        key           TEXT NOT NULL UNIQUE,     -- 'diff:<account>:<asset>' | the record's external_id
+        kind          TEXT NOT NULL,            -- record | diff
+        account_id    INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        asset         TEXT,                     -- NULL = the account's own cash / USDT wallet
+        source        TEXT NOT NULL,            -- bybit | import
+        date          TEXT NOT NULL,            -- of the suggested transaction; for a diff, when the source reported it
+        type          TEXT NOT NULL,            -- suggested transaction type
+        quantity      REAL NOT NULL DEFAULT 0,
+        price         REAL,
+        amount        REAL NOT NULL DEFAULT 0,
+        fee           REAL NOT NULL DEFAULT 0,
+        network_fee   REAL NOT NULL DEFAULT 0,  -- a coin withdrawal's network fee, in units, included in quantity
+        observed      REAL,                     -- diff: what the source holds (units, or the balance when asset is NULL)
+        title         TEXT NOT NULL,
+        detail        TEXT,
+        auto          INTEGER NOT NULL DEFAULT 0, -- record applied by itself once it fits the ledger
+        error         TEXT,                     -- why it couldn't be applied yet
+        status        TEXT NOT NULL DEFAULT 'open', -- open | dismissed
+        first_seen_at TEXT NOT NULL,
+        updated_at    TEXT NOT NULL
+      );
+    `);
+  },
 ];
 
 /**
@@ -421,6 +465,13 @@ export type FuturesAccount = {
   name: string;
   wallet_balance: number;
   note: string | null;
+  source: "manual" | "bybit";
+  /** Ledger account ('futures' kind) recording the synced wallet's flows; NULL for manual accounts. */
+  account_id: number | null;
+  fund_balance: number | null;
+  margin_rate: number | null;
+  synced_at: string | null;
+  sync_error: string | null;
 };
 
 export type FuturesPosition = {
@@ -434,6 +485,9 @@ export type FuturesPosition = {
   entry_price: number;
   leverage: number | null;
   note: string | null;
+  mark_price: number | null;
+  liq_price: number | null;
+  upnl: number | null;
 };
 
 export type TwFuturesAccount = {
@@ -501,7 +555,8 @@ export type AlertRow = {
   resolved_at: string | null;
 };
 
-export type AccountKind = "cash" | "stock" | "crypto";
+/** 'futures': a synced futures wallet (USDT), recorded like a cash account; its value comes from futures_accounts. */
+export type AccountKind = "cash" | "stock" | "crypto" | "futures";
 
 export type Account = {
   id: number;
@@ -517,7 +572,20 @@ export type Account = {
   updated_at: string;
 };
 
-export type TxType = "open" | "buy" | "sell" | "dividend" | "deposit" | "withdraw" | "fee" | "tax" | "adjust" | "funding";
+/** transfer: between accounts of your own (not money in or out); pnl: a futures position's realized PnL. */
+export type TxType =
+  | "open"
+  | "buy"
+  | "sell"
+  | "dividend"
+  | "deposit"
+  | "withdraw"
+  | "transfer"
+  | "fee"
+  | "tax"
+  | "adjust"
+  | "funding"
+  | "pnl";
 
 export type Transaction = {
   id: number;
@@ -538,3 +606,27 @@ export type Transaction = {
 };
 
 export type Instrument = { asset: string; symbol: string; name: string | null };
+
+export type InboxItem = {
+  id: number;
+  key: string;
+  kind: "record" | "diff";
+  account_id: number;
+  asset: string | null;
+  source: string;
+  date: string;
+  type: TxType;
+  quantity: number;
+  price: number | null;
+  amount: number;
+  fee: number;
+  network_fee: number;
+  observed: number | null;
+  title: string;
+  detail: string | null;
+  auto: 0 | 1;
+  error: string | null;
+  status: "open" | "dismissed";
+  first_seen_at: string;
+  updated_at: string;
+};

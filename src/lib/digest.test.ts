@@ -46,6 +46,7 @@ describe("digestMessage", () => {
     expect(digestMessage(withFutures, prev, "pct", 2)).toBe(
       ["📊 10/26 淨資產 ▲ +6.25%（較 10/25）", "期貨 ▲ 新增", "⚠️ 目前有 2 個未解除的告警"].join("\n"),
     );
+    expect(digestMessage(today, undefined, "pct", 0, 3)).toBe(["📊 10/26 已記錄快照", "📥 3 筆同步或匯入的紀錄等你確認"].join("\n"));
   });
 });
 
