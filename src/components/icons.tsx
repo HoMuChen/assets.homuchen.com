@@ -48,3 +48,6 @@ export const IconCamera = (p: SVGProps<SVGSVGElement>) => (
 export const IconLogout = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base(p)}><path d="M6 2.5H3.5a1 1 0 00-1 1v9a1 1 0 001 1H6M10.5 11l3-3-3-3M13.5 8H6" /></svg>
 );
+export const IconLedger = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}><rect x="2.5" y="1.75" width="11" height="12.5" rx="1.5" /><path d="M5 5h6M5 8h6M5 11h3.5" /></svg>
+);

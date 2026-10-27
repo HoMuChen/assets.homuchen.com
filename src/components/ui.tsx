@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { fmtPct, fmtTwd } from "@/lib/format";
 
@@ -69,6 +70,17 @@ export function Badge({ children, tone = "default" }: { children: ReactNode; ton
 
 export function CategoryDot({ color }: { color: string }) {
   return <span className="inline-block size-2 shrink-0 rounded-full" style={{ background: color }} />;
+}
+
+/** A holding's or cash account's name, linking to its transaction history once it has a ledger account. */
+export function HoldingLink({ accountId, asset, children }: { accountId: number | null; asset: string | null; children: ReactNode }) {
+  if (accountId == null) return <span>{children}</span>;
+  const href = `/transactions?account=${accountId}${asset ? `&asset=${encodeURIComponent(asset)}` : ""}`;
+  return (
+    <Link href={href} title="查看交易明細" className="decoration-fg-4 underline-offset-4 hover:underline">
+      {children}
+    </Link>
+  );
 }
 
 export function Empty({ children }: { children: ReactNode }) {

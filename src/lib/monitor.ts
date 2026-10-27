@@ -1,8 +1,11 @@
 import { activeAlerts, raiseAlert, resolveAlert, resolveOthers } from "./alerts";
 import { db, type JobRun, type TwFuturesAccount } from "./db";
 import { fmtPct, fmtTime, fmtTwd } from "./format";
-import { getRuns, isFailing } from "./jobs";
+import { getRuns, isFailing, recordRun } from "./jobs";
+import { compareWithLedger } from "./legacy";
+import { ledgerMode } from "./ledger";
 import { getPriceMap, heldInstruments } from "./prices";
+import { getSetting } from "./settings";
 import { isTwFuturesOpen, isTwMarketOpen } from "./time";
 import { sinopacConfigured } from "./tw-futures";
 
@@ -171,12 +174,45 @@ export async function checkHeartbeats(now = new Date()) {
   }
 }
 
+/** Days the ledger must agree with the old tables before it can become the source of truth. */
+export const LEDGER_TRIAL_DAYS = 7;
+
+/** Compare the ledger with the old tables it shadows; any difference is a bug in one of them. */
+export async function checkLedger(now = new Date()) {
+  const diffs = compareWithLedger();
+  recordRun("ledger:compare", diffs.length ? `${diffs.length} 筆不一致` : null, now);
+  if (!diffs.length) return resolveAlert("ledger:compare", now);
+  const lines = diffs.slice(0, 3).map((d) => `${d.label}：舊 ${d.legacy}／帳本 ${d.ledger}`);
+  if (diffs.length > 3) lines.push(`…共 ${diffs.length} 筆`);
+  await raiseAlert("ledger:compare", "warning", "帳本與舊持股資料不一致", lines.join("\n"), now);
+}
+
+/** How the shadow run stands: agreeing since when, and whether the switch to the ledger is open. */
+export function ledgerTrial(now = new Date()) {
+  const run = getRuns().get("ledger:compare");
+  const ledgerStart = getSetting("ledger_started_at");
+  const agreeing = !!run && !isFailing(run);
+  // Agreeing since the later of the ledger's start and the last mismatch.
+  const since = agreeing ? ([ledgerStart, run.last_error_at].filter((x): x is string => !!x).sort().at(-1) ?? run.last_run_at) : null;
+  const days = since ? (now.getTime() - Date.parse(since)) / (24 * HOUR) : 0;
+  const fresh = !!run && now.getTime() - Date.parse(run.last_run_at) < 15 * MIN;
+  return {
+    mode: ledgerMode(),
+    checked: !!run,
+    agreeing,
+    since,
+    days,
+    ready: agreeing && fresh && days >= LEDGER_TRIAL_DAYS,
+  };
+}
+
 const CHECKS: [string, (now: Date) => Promise<unknown>][] = [
   ["futures risk", checkTwFuturesRisk],
   ["sinopac sync", checkSinopacSync],
   ["quotes", checkQuotes],
   ["snapshot", checkSnapshot],
   ["heartbeats", checkHeartbeats],
+  ["ledger", checkLedger],
 ];
 
 /** Run every check; one failing check doesn't stop the rest, but the run as a whole reports it. */

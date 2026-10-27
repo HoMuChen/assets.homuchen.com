@@ -1,14 +1,7 @@
-import {
-  db,
-  type CashAccount,
-  type CryptoHolding,
-  type FuturesAccount,
-  type FuturesPosition,
-  type PriceRow,
-  type Property,
-  type StockHolding,
-  type TwFuturesAccount,
-} from "./db";
+import { db, type FuturesAccount, type FuturesPosition, type PriceRow, type Property, type TwFuturesAccount } from "./db";
+import { getHoldings } from "./holdings";
+import type { CashBalance, Holding } from "./ledger";
+import { assetId } from "./tx";
 import { mortgageStatus, type MortgageStatus } from "./mortgage";
 import { getPriceMap, USDT_COIN_ID } from "./prices";
 
@@ -35,9 +28,9 @@ export type Position = {
   price: PriceRow | null;
 };
 
-export type StockPosition = StockHolding & { position: Position };
-export type CryptoPosition = CryptoHolding & { position: Position };
-export type CashPosition = CashAccount & { position: Position; fxRate: number | null };
+export type StockPosition = Holding & { avgCost: number | null; position: Position };
+export type CryptoPosition = Holding & { coinId: string; avgCost: number | null; position: Position };
+export type CashPosition = CashBalance & { position: Position; fxRate: number | null };
 export type FuturesPositionView = FuturesPosition & {
   /** Mark price in USDT (CoinGecko USD price ÷ USDT's USD price). */
   markUsdt: number | null;
@@ -111,12 +104,15 @@ function dayChange(value: number, pct: number | null | undefined): number | null
   return value - value / (1 + pct / 100);
 }
 
+const avgCost = (h: Holding) => (h.cost == null || h.quantity === 0 ? null : h.cost / h.quantity);
+
 export function getPortfolio(): Portfolio {
   const conn = db();
   const prices = getPriceMap();
   const missing: string[] = [];
+  const held = getHoldings();
 
-  const cash = (conn.prepare("SELECT * FROM cash_accounts ORDER BY balance DESC").all() as CashAccount[]).map((a) => {
+  const cash = held.cash.map((a) => {
     const fx = a.currency === "TWD" ? null : prices.get(`fx:${a.currency}`) ?? null;
     if (a.currency !== "TWD" && !fx) missing.push(`${a.name} (${a.currency} 匯率)`);
     const rate = a.currency === "TWD" ? 1 : fx?.price ?? 0;
@@ -125,7 +121,7 @@ export function getPortfolio(): Portfolio {
       fxRate: fx?.price ?? null,
       position: {
         category: "cash" as const,
-        key: `cash:${a.id}`,
+        key: `cash:${a.accountId}`,
         name: a.name,
         detail: [a.institution, a.currency].filter(Boolean).join(" · "),
         valueTwd: a.balance * rate,
@@ -137,19 +133,20 @@ export function getPortfolio(): Portfolio {
     };
   });
 
-  const stocks = (conn.prepare("SELECT * FROM stock_holdings").all() as StockHolding[]).map((h) => {
-    const q = prices.get(`tw:${h.symbol}`) ?? null;
+  const stocks = held.stocks.map((h) => {
+    const q = prices.get(h.asset) ?? null;
     if (!q) missing.push(`${h.symbol} ${h.name ?? ""}`.trim());
-    const value = (q?.price ?? 0) * h.shares;
+    const value = (q?.price ?? 0) * h.quantity;
     return {
       ...h,
+      avgCost: avgCost(h),
       position: {
         category: "stocks" as const,
-        key: `tw:${h.id}`,
+        key: `stock:${h.accountId}:${h.asset}`,
         name: h.name ? `${h.name}` : h.symbol,
-        detail: [h.symbol, h.broker].filter(Boolean).join(" · "),
+        detail: [h.symbol, h.account].filter(Boolean).join(" · "),
         valueTwd: value,
-        costTwd: h.avg_cost != null ? h.avg_cost * h.shares : null,
+        costTwd: h.cost,
         dayChangeTwd: dayChange(value, q?.change_pct),
         dayChangePct: q?.change_pct ?? null,
         price: q,
@@ -157,19 +154,21 @@ export function getPortfolio(): Portfolio {
     };
   });
 
-  const crypto = (conn.prepare("SELECT * FROM crypto_holdings").all() as CryptoHolding[]).map((h) => {
-    const q = prices.get(`crypto:${h.coin_id}`) ?? null;
+  const crypto = held.crypto.map((h) => {
+    const q = prices.get(h.asset) ?? null;
     if (!q) missing.push(h.symbol.toUpperCase());
-    const value = (q?.price ?? 0) * h.amount;
+    const value = (q?.price ?? 0) * h.quantity;
     return {
       ...h,
+      coinId: assetId(h.asset),
+      avgCost: avgCost(h),
       position: {
         category: "crypto" as const,
-        key: `crypto:${h.id}`,
+        key: `crypto:${h.accountId}:${h.asset}`,
         name: h.symbol.toUpperCase(),
-        detail: [h.name, h.location].filter(Boolean).join(" · "),
+        detail: [h.name, h.account].filter(Boolean).join(" · "),
         valueTwd: value,
-        costTwd: h.avg_cost_twd != null ? h.avg_cost_twd * h.amount : null,
+        costTwd: h.cost,
         dayChangeTwd: dayChange(value, q?.change_pct),
         dayChangePct: q?.change_pct ?? null,
         price: q,
@@ -234,7 +233,7 @@ export function getPortfolio(): Portfolio {
     e.futuresQty += fut;
     exposureMap.set(coinId, e);
   };
-  crypto.forEach((h) => bump(h.coin_id, h.symbol, h.amount, 0));
+  crypto.forEach((h) => bump(h.coinId, h.symbol, h.quantity, 0));
   allFuturesPositions.forEach((fp) => bump(fp.coin_id, fp.symbol, 0, (fp.side === "long" ? 1 : -1) * fp.quantity));
   const exposure = [...exposureMap.values()]
     .map((e) => {

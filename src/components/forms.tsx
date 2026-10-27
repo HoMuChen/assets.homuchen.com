@@ -1,16 +1,27 @@
 "use client";
 
-import { useState } from "react";
-import { saveCash, saveCrypto, saveFuturesAccount, saveFuturesPosition, saveProperty, saveStock, saveTwFutures } from "@/lib/actions";
-import type { CashAccount, CryptoHolding, FuturesAccount, FuturesPosition, Property, StockHolding, TwFuturesAccount } from "@/lib/db";
+import { useId, useState } from "react";
+import { saveAccount, saveCash, saveFuturesAccount, saveFuturesPosition, saveProperty, saveTransaction, saveTwFutures } from "@/lib/actions";
+import type { Account, FuturesAccount, FuturesPosition, Property, TwFuturesAccount, TxType } from "@/lib/db";
+import { twTradeCosts } from "@/lib/fees";
+import { fmtNum } from "@/lib/format";
+import type { CashBalance, TxRow } from "@/lib/ledger";
+import { assetId, TX_LABEL } from "@/lib/tx";
 import { Field, FormDialog, inputCls } from "./form-dialog";
 
 const v = (x: unknown) => (x == null ? "" : String(x));
 
-export function CashForm({ item }: { item?: CashAccount }) {
+export function CashForm({ item }: { item?: CashBalance }) {
   return (
-    <FormDialog title={item ? "編輯現金帳戶" : "新增現金帳戶"} action={saveCash} trigger={item ? "edit" : "add"} deleteKind="cash" deleteId={item?.id}>
-      <input type="hidden" name="id" value={v(item?.id)} />
+    <FormDialog
+      title={item ? "編輯現金帳戶" : "新增現金帳戶"}
+      action={saveCash}
+      trigger={item ? "edit" : "add"}
+      deleteKind="account"
+      deleteId={item?.accountId ?? undefined}
+      deleteWarning="會一併刪除這個帳戶的餘額紀錄。"
+    >
+      <input type="hidden" name="id" value={v(item?.accountId)} />
       <Field label="帳戶名稱">
         <input name="name" required defaultValue={v(item?.name)} placeholder="薪轉戶" className={inputCls} />
       </Field>
@@ -20,7 +31,7 @@ export function CashForm({ item }: { item?: CashAccount }) {
       <Field label="幣別" hint="非 TWD 會以即時匯率換算">
         <input name="currency" required defaultValue={item?.currency ?? "TWD"} maxLength={3} className={`${inputCls} uppercase`} />
       </Field>
-      <Field label="餘額">
+      <Field label="餘額" hint={item ? "和上次不同時，會記一筆今天的調整" : undefined}>
         <input name="balance" required inputMode="decimal" defaultValue={v(item?.balance)} className={`${inputCls} num`} />
       </Field>
       <Field label="備註" wide>
@@ -30,54 +41,233 @@ export function CashForm({ item }: { item?: CashAccount }) {
   );
 }
 
-export function StockForm({ item }: { item?: StockHolding }) {
+export type TxAccountOption = { name: string; feeDiscount: number | null };
+
+const TX_TYPES: Record<"stock" | "crypto", TxType[]> = {
+  stock: ["buy", "sell", "dividend", "adjust"],
+  crypto: ["buy", "sell", "adjust"],
+};
+
+/** Record a stock or coin transaction, or edit one (`item`). `preset` pre-fills a new one from a holding row. */
+export function TransactionForm({
+  kind,
+  accounts,
+  today,
+  item,
+  preset,
+  trigger = item ? "edit" : "add",
+  triggerLabel,
+}: {
+  kind: "stock" | "crypto";
+  accounts: TxAccountOption[];
+  today: string;
+  item?: TxRow;
+  preset?: { account?: string; symbol?: string };
+  trigger?: "add" | "addSubtle" | "edit";
+  triggerLabel?: string;
+}) {
+  const title = item ? `編輯${TX_LABEL[item.type]}${item.symbol ? ` ${item.symbol}` : ""}` : kind === "stock" ? "記一筆股票交易" : "記一筆加密貨幣交易";
   return (
-    <FormDialog title={item ? `編輯 ${item.symbol} ${item.name ?? ""}` : "新增台股持股"} action={saveStock} trigger={item ? "edit" : "add"} deleteKind="stock" deleteId={item?.id}>
-      <input type="hidden" name="id" value={v(item?.id)} />
-      <Field label="股票代號" hint="名稱會自動從 FinMind 帶入">
-        <input name="symbol" required defaultValue={v(item?.symbol)} placeholder="2330" className={`${inputCls} num`} />
-      </Field>
-      <Field label="股數" hint="1 張 = 1,000 股">
-        <input name="shares" required inputMode="decimal" defaultValue={v(item?.shares)} className={`${inputCls} num`} />
-      </Field>
-      <Field label="平均成本（每股）" hint="選填，用來計算未實現損益">
-        <input name="avg_cost" inputMode="decimal" defaultValue={v(item?.avg_cost)} className={`${inputCls} num`} />
-      </Field>
-      <Field label="券商">
-        <input name="broker" defaultValue={v(item?.broker)} placeholder="永豐金" className={inputCls} />
-      </Field>
-      <Field label="備註" wide>
-        <input name="note" defaultValue={v(item?.note)} className={inputCls} />
-      </Field>
+    <FormDialog
+      title={title}
+      action={saveTransaction}
+      trigger={trigger}
+      triggerLabel={triggerLabel}
+      deleteKind={item?.source === "manual" ? "transaction" : undefined}
+      deleteId={item?.id}
+    >
+      <TxFields kind={kind} accounts={accounts} today={today} item={item} preset={preset} />
     </FormDialog>
   );
 }
 
-export function CryptoForm({ item }: { item?: CryptoHolding }) {
+function TxFields({
+  kind,
+  accounts,
+  today,
+  item,
+  preset,
+}: {
+  kind: "stock" | "crypto";
+  accounts: TxAccountOption[];
+  today: string;
+  item?: TxRow;
+  preset?: { account?: string; symbol?: string };
+}) {
+  const [type, setType] = useState<TxType>(item?.type ?? "buy");
+  const [account, setAccount] = useState(item?.account_name ?? preset?.account ?? (accounts.length === 1 ? accounts[0].name : ""));
+  const [symbol, setSymbol] = useState(item?.asset ? assetId(item.asset) : (preset?.symbol ?? ""));
+  const [quantity, setQuantity] = useState(item ? v(item.type === "sell" ? -item.quantity : item.quantity) : "");
+  const [price, setPrice] = useState(v(item?.price));
+  const [date, setDate] = useState(item?.date ?? today);
+  const listId = useId();
+  const trade = type === "buy" || type === "sell";
+  const unit = kind === "stock" ? "股" : "顆";
+
+  // What the server fills in when fee / tax are left blank.
+  const n = (s: string) => Number(s.replace(/,/g, ""));
+  const auto =
+    kind === "stock" && trade && n(quantity) > 0 && n(price) > 0
+      ? twTradeCosts({
+          side: type,
+          symbol: symbol.trim().toUpperCase(),
+          shares: n(quantity),
+          price: n(price),
+          date,
+          feeDiscount: accounts.find((a) => a.name === account.trim())?.feeDiscount,
+        })
+      : { fee: 0, tax: 0 };
+
   return (
-    <FormDialog
-      title={item ? `編輯 ${item.symbol}` : "新增現貨"}
-      action={saveCrypto}
-      trigger={item ? "edit" : "addSubtle"}
-      triggerLabel={item ? undefined : "新增現貨"}
-      deleteKind="crypto"
-      deleteId={item?.id}
-    >
+    <>
       <input type="hidden" name="id" value={v(item?.id)} />
-      <Field label="幣種" hint="輸入代號（BTC）或 CoinGecko id（bitcoin）">
-        <input name="coin" required defaultValue={v(item?.coin_id)} placeholder="BTC" className={inputCls} />
+      <input type="hidden" name="kind" value={kind} />
+      <Field label={kind === "stock" ? "券商帳戶" : "交易所／錢包"} hint={accounts.length ? undefined : "輸入名稱，第一次使用會自動建立"}>
+        <input
+          name="account"
+          required
+          list={listId}
+          value={account}
+          onChange={(e) => setAccount(e.target.value)}
+          placeholder={accounts.length ? "選擇或輸入新帳戶名稱" : kind === "stock" ? "例如 國泰證券" : "例如 Bybit"}
+          className={inputCls}
+        />
+        <datalist id={listId}>
+          {accounts.map((a) => (
+            <option key={a.name} value={a.name} />
+          ))}
+        </datalist>
       </Field>
-      <Field label="數量">
-        <input name="amount" required inputMode="decimal" defaultValue={v(item?.amount)} className={`${inputCls} num`} />
+      <Field label="類型">
+        {type === "open" ? (
+          <>
+            <input type="hidden" name="type" value="open" />
+            <span className="flex h-8 items-center text-[13px] text-fg-2">期初（帳本上線時的持有）</span>
+          </>
+        ) : (
+          <select name="type" value={type} onChange={(e) => setType(e.target.value as TxType)} className={inputCls}>
+            {TX_TYPES[kind].map((t) => (
+              <option key={t} value={t}>
+                {TX_LABEL[t]}
+              </option>
+            ))}
+          </select>
+        )}
       </Field>
-      <Field label="平均成本（每顆，TWD）" hint="選填">
-        <input name="avg_cost_twd" inputMode="decimal" defaultValue={v(item?.avg_cost_twd)} className={`${inputCls} num`} />
+      <Field label={kind === "stock" ? "股票代號" : "幣種"} hint={kind === "crypto" ? "代號（BTC）或 CoinGecko id（bitcoin）" : undefined}>
+        <input
+          name="symbol"
+          required
+          value={symbol}
+          onChange={(e) => setSymbol(e.target.value)}
+          placeholder={kind === "stock" ? "2330" : "BTC"}
+          className={`${inputCls} ${kind === "stock" ? "num" : ""}`}
+        />
       </Field>
-      <Field label="存放位置">
-        <input name="location" defaultValue={v(item?.location)} placeholder="冷錢包 / Binance" className={inputCls} />
+      <Field label="日期">
+        <input name="date" type="date" required max={today} value={date} onChange={(e) => setDate(e.target.value)} className={`${inputCls} num`} />
       </Field>
+      <Field
+        label={type === "dividend" ? `配股（${unit}）` : type === "adjust" ? `增減數量（${unit}）` : `數量（${unit}）`}
+        hint={
+          type === "adjust"
+            ? "增加填正數、減少填負數；新增的部分成本為 0（例如分割、配股），知道成本請改記「買進」"
+            : type === "dividend"
+              ? "選填，有配股才填"
+              : kind === "stock"
+                ? "1 張 = 1,000 股"
+                : undefined
+        }
+      >
+        <input
+          name="quantity"
+          required={type !== "dividend"}
+          inputMode="decimal"
+          value={quantity}
+          onChange={(e) => setQuantity(e.target.value)}
+          className={`${inputCls} num`}
+        />
+      </Field>
+      {(trade || type === "open") && (
+        <Field label={type === "open" ? "成本均價（每單位）" : "成交價（每單位）"} hint={kind === "crypto" ? "以台幣計" : type === "open" ? "選填，空白表示成本未知" : undefined}>
+          <input
+            name="price"
+            required={trade}
+            inputMode="decimal"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            className={`${inputCls} num`}
+          />
+        </Field>
+      )}
+      {type === "dividend" && (
+        <Field label="現金股利（總額）" hint="扣費用前的金額">
+          <input
+            name="gross"
+            inputMode="decimal"
+            defaultValue={item ? v(item.amount + item.fee + item.tax) : ""}
+            className={`${inputCls} num`}
+          />
+        </Field>
+      )}
+      {(trade || type === "dividend") && (
+        <Field label={kind === "crypto" ? "手續費（TWD）" : type === "dividend" ? "匯費" : "手續費"} hint={trade && kind === "stock" ? "空白會依帳戶折扣自動計算" : undefined}>
+          <input
+            name="fee"
+            inputMode="decimal"
+            defaultValue={v(item?.fee)}
+            placeholder={trade && kind === "stock" ? `自動：${fmtNum(auto.fee, 0)}` : "0"}
+            className={`${inputCls} num`}
+          />
+        </Field>
+      )}
+      {((type === "sell" && kind === "stock") || type === "dividend") && (
+        <Field label={type === "sell" ? "證交稅" : "二代健保補充保費"} hint={type === "dividend" ? "單筆股利 2 萬以上會扣 2.11%" : undefined}>
+          <input
+            name="tax"
+            inputMode="decimal"
+            defaultValue={v(item?.tax)}
+            placeholder={type === "sell" ? `自動：${fmtNum(auto.tax, 0)}` : "0"}
+            className={`${inputCls} num`}
+          />
+        </Field>
+      )}
       <Field label="備註" wide>
         <input name="note" defaultValue={v(item?.note)} className={inputCls} />
+      </Field>
+    </>
+  );
+}
+
+export function AccountForm({ item }: { item: Account }) {
+  return (
+    <FormDialog
+      title={`編輯 ${item.name}`}
+      action={saveAccount}
+      trigger="edit"
+      deleteKind="account"
+      deleteId={item.id}
+      deleteWarning="會一併刪除這個帳戶的所有交易紀錄與持股。"
+    >
+      <input type="hidden" name="id" value={item.id} />
+      <Field label="帳戶名稱">
+        <input name="name" required defaultValue={item.name} className={inputCls} />
+      </Field>
+      <Field label="機構">
+        <input name="institution" defaultValue={v(item.institution)} className={inputCls} />
+      </Field>
+      {item.kind === "stock" && (
+        <Field label="手續費折扣（折）" hint="例如 2.8 折填 2.8；空白 = 不打折。用來預填手續費" wide>
+          <input
+            name="fee_discount"
+            inputMode="decimal"
+            defaultValue={item.fee_discount == null ? "" : String(Math.round(item.fee_discount * 1000) / 100)}
+            className={`${inputCls} num`}
+          />
+        </Field>
+      )}
+      <Field label="備註" wide>
+        <input name="note" defaultValue={v(item.note)} className={inputCls} />
       </Field>
     </FormDialog>
   );

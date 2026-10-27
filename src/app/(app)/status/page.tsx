@@ -1,10 +1,11 @@
 import type { ReactNode } from "react";
+import { LedgerModeButton } from "@/components/ledger-mode-button";
 import { TestNotificationButton } from "@/components/test-notification-button";
 import { Card, CardHeader, PageHeader, td, th, tr } from "@/components/ui";
 import { SCHEMA_VERSION, type AlertRow, type JobRun } from "@/lib/db";
 import { fmtTime } from "@/lib/format";
 import { isFailing } from "@/lib/jobs";
-import { HEARTBEATS } from "@/lib/monitor";
+import { HEARTBEATS, LEDGER_TRIAL_DAYS } from "@/lib/monitor";
 import { getStatus } from "@/lib/status";
 
 type Tone = "ok" | "warning" | "danger" | "idle";
@@ -69,7 +70,7 @@ function AlertItem({ a, now }: { a: AlertRow; now: number }) {
 }
 
 export default function StatusPage() {
-  const { now, alerts, recent, openKeys, runs, feeds, sinopac, snapshot, monitorFresh, telegram, heartbeats, risk, digest } =
+  const { now, alerts, recent, openKeys, runs, feeds, sinopac, snapshot, monitorFresh, telegram, heartbeats, risk, digest, ledger } =
     getStatus();
   const sinopacRun = runs.get("sync:sinopac");
   const sinopacTone: Tone =
@@ -256,6 +257,47 @@ export default function StatusPage() {
               </tbody>
             </table>
           </div>
+        </Card>
+
+        <Card className="overflow-hidden">
+          <CardHeader title="交易帳本" right={<LedgerModeButton mode={ledger.mode} ready={ledger.ready} />} />
+          <dl className="grid grid-cols-1 gap-x-6 gap-y-3 px-4 py-4 text-[13px] md:grid-cols-3">
+            <div className="flex flex-col gap-1">
+              <dt className="text-[12px] text-fg-3">各頁持股的來源</dt>
+              <dd className="text-fg-2">{ledger.mode === "primary" ? "交易帳本" : "舊資料（帳本在背景比對中）"}</dd>
+            </div>
+            <div className="flex flex-col gap-1">
+              <dt className="text-[12px] text-fg-3">帳本與舊資料比對</dt>
+              <dd>
+                {ledger.diffs.length ? (
+                  <Health tone="warning">{ledger.diffs.length} 筆不一致</Health>
+                ) : !ledger.checked ? (
+                  <Health tone="idle">等待第一次比對</Health>
+                ) : (
+                  <Health tone="ok">一致，已連續 {Math.floor(ledger.days)} 天</Health>
+                )}
+              </dd>
+            </div>
+            <div className="flex flex-col gap-1">
+              <dt className="text-[12px] text-fg-3">切換條件</dt>
+              <dd className="text-fg-2">
+                {ledger.mode === "primary"
+                  ? "已切換；舊資料仍會同步，可隨時切回"
+                  : ledger.ready
+                    ? `已連續一致 ${LEDGER_TRIAL_DAYS} 天，可以切換`
+                    : `連續一致 ${LEDGER_TRIAL_DAYS} 天後可切換${ledger.agreeing ? `（還要 ${Math.max(1, Math.ceil(LEDGER_TRIAL_DAYS - ledger.days))} 天）` : ""}`}
+              </dd>
+            </div>
+          </dl>
+          {ledger.diffs.length > 0 && (
+            <ul className="border-t border-line px-4 py-3 text-[12px] text-fg-3">
+              {ledger.diffs.slice(0, 20).map((d, i) => (
+                <li key={i} className="py-0.5">
+                  <span className="text-fg-2">{d.label}</span>：舊 {d.legacy}／帳本 {d.ledger}
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
 
         <Card>

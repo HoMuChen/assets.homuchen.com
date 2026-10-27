@@ -1,5 +1,7 @@
 import { vi } from "vitest";
-import { db } from "@/lib/db";
+import { db, type TxType } from "@/lib/db";
+import { getAccount, saveInstrument } from "@/lib/ledger";
+import { accountByName, addTransaction, saveCashAccount, type TxInput } from "@/lib/transactions";
 
 /** Empty every table, keeping the schema. */
 export function resetDb() {
@@ -62,3 +64,35 @@ export function mockTelegram(ok = true) {
 
 /** A Date at the given Taipei wall-clock time, e.g. at("2026-10-26 09:30"). */
 export const at = (taipei: string) => new Date(`${taipei.replace(" ", "T")}:00+08:00`);
+
+/** A cash account with this balance, written the way the cash form does. Returns the ledger account id. */
+export function cashAccount(name: string, balance: number, currency = "TWD"): number {
+  saveCashAccount({ id: null, name, institution: null, currency, balance, note: null });
+  return (db().prepare("SELECT id FROM accounts WHERE kind = 'cash' ORDER BY id DESC LIMIT 1").get() as { id: number }).id;
+}
+
+/**
+ * A stock or coin position held as of `date`, recorded as an opening balance at `price` per unit
+ * (null = unknown cost). Returns the ledger account id.
+ */
+export function holding(
+  asset: string,
+  quantity: number,
+  price: number | null,
+  opts: { account?: string; symbol?: string; name?: string; date?: string } = {},
+): number {
+  const kind = asset.startsWith("tw:") ? "stock" : "crypto";
+  const symbol = opts.symbol ?? asset.slice(asset.indexOf(":") + 1).toUpperCase();
+  saveInstrument(asset, symbol, opts.name ?? null);
+  const account = accountByName(kind, opts.account ?? (kind === "stock" ? "國泰" : "冷錢包"));
+  addTransaction({ ...tx("open", account.id, asset, quantity, price), date: opts.date ?? "2026-01-02" });
+  return account.id;
+}
+
+/** A transaction input with zero fees and the cash leg a trade of this size implies. */
+export function tx(type: TxType, accountId: number, asset: string | null, quantity: number, price: number | null = null, date = "2026-01-02"): TxInput {
+  const value = price == null ? 0 : Math.abs(quantity) * price;
+  const amount = type === "buy" ? -value : type === "sell" ? value : 0;
+  if (!getAccount(accountId)) throw new Error(`no account ${accountId}`);
+  return { accountId, date, type, asset, quantity, price, amount, fee: 0, tax: 0, note: null };
+}

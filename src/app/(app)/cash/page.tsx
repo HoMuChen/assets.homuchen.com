@@ -1,6 +1,6 @@
 import { CashForm } from "@/components/forms";
 import { SummaryStrip } from "@/components/summary-strip";
-import { Card, Empty, PageHeader, td, th, tr } from "@/components/ui";
+import { Card, Empty, HoldingLink, PageHeader, td, th, tr } from "@/components/ui";
 import { fmtNum, fmtPct, fmtPrice, fmtTwd } from "@/lib/format";
 import { getPortfolio } from "@/lib/portfolio";
 
@@ -42,10 +42,12 @@ export default function CashPage() {
                 </thead>
                 <tbody>
                   {rows.map((r) => (
-                    <tr key={r.id} className={tr}>
+                    <tr key={r.position.key} className={tr}>
                       <td className={td}>
                         <div className="flex items-center gap-2">
-                          <span className="text-fg">{r.name}</span>
+                          <HoldingLink accountId={r.accountId} asset={null}>
+                            <span className="text-fg">{r.name}</span>
+                          </HoldingLink>
                           {r.institution && <span className="text-[12px] text-fg-4">{r.institution}</span>}
                         </div>
                       </td>

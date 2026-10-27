@@ -2,7 +2,8 @@ import { activeAlerts, resolvedSince } from "./alerts";
 import { db, type TwFuturesAccount } from "./db";
 import { digestMode } from "./digest";
 import { getRuns } from "./jobs";
-import { feedStatuses, heartbeatsEnabled, riskThresholds } from "./monitor";
+import { compareWithLedger } from "./legacy";
+import { feedStatuses, heartbeatsEnabled, ledgerTrial, riskThresholds } from "./monitor";
 import { telegramConfigured } from "./telegram";
 import { sinopacConfigured } from "./tw-futures";
 
@@ -36,5 +37,6 @@ export function getStatus(now = new Date()) {
     heartbeats: heartbeatsEnabled(),
     risk: riskThresholds(),
     digest: digestMode(),
+    ledger: { ...ledgerTrial(now), diffs: compareWithLedger() },
   };
 }

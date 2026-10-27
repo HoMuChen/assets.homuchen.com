@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { at, insert, resetDb, setPrice } from "@/test/helpers";
+import { at, cashAccount, holding, insert, resetDb, setPrice } from "@/test/helpers";
 import { activeAlerts } from "./alerts";
 import { db } from "./db";
 import { recordRun } from "./jobs";
-import { checkHeartbeats, checkQuotes, checkSinopacSync, checkSnapshot, checkTwFuturesRisk, runChecks } from "./monitor";
+import { checkHeartbeats, checkLedger, checkQuotes, checkSinopacSync, checkSnapshot, checkTwFuturesRisk, ledgerTrial, runChecks } from "./monitor";
+import { setSetting } from "./settings";
 
 beforeEach(resetDb);
 
@@ -113,8 +114,8 @@ describe("checkQuotes", () => {
   const SAT = at("2026-10-31 12:00"); // TWSE closed: 2 h for stocks
 
   it("flags a feed whose held instruments have stale or missing quotes, then clears it", async () => {
-    insert("stock_holdings", { symbol: "2330", shares: 1 });
-    insert("stock_holdings", { symbol: "0050", shares: 1 });
+    holding("tw:2330", 1, null);
+    holding("tw:0050", 1, null);
     setPrice("tw:2330", 1_000, { fetchedAt: new Date(SAT.getTime() - 3 * HOUR) });
     recordRun("feed:tw", "台股 2330: 502 Bad Gateway", new Date(SAT.getTime() - HOUR));
 
@@ -131,8 +132,8 @@ describe("checkQuotes", () => {
   });
 
   it("checks crypto and FX against their own cadence", async () => {
-    insert("crypto_holdings", { coin_id: "bitcoin", symbol: "btc", amount: 1 });
-    insert("cash_accounts", { name: "美元戶", currency: "USD", balance: 1 });
+    holding("crypto:bitcoin", 1, null);
+    cashAccount("美元戶", 1, "USD");
     setPrice("crypto:bitcoin", 1, { fetchedAt: new Date(SAT.getTime() - 40 * 60_000) });
     setPrice("fx:USD", 32, { fetchedAt: new Date(SAT.getTime() - 2 * HOUR) });
     await checkQuotes(SAT);
@@ -205,9 +206,43 @@ describe("checkHeartbeats", () => {
   });
 });
 
+describe("checkLedger / ledgerTrial", () => {
+  it("alerts while the old tables and the ledger disagree, and counts agreeing days from the last mismatch", async () => {
+    setSetting("ledger_started_at", at("2026-10-20 09:00").toISOString());
+    holding("tw:2330", 1_000, 500);
+    expect(ledgerTrial(at("2026-10-27 08:00"))).toMatchObject({ mode: "shadow", checked: false, ready: false });
+
+    await checkLedger(at("2026-10-27 08:00"));
+    expect(open()["ledger:compare"]).toBeUndefined();
+    expect(ledgerTrial(at("2026-10-27 08:05"))).toMatchObject({ agreeing: true, ready: false, days: expect.closeTo(7 - 1 / 24 + 5 / 1440, 6) });
+    expect(ledgerTrial(at("2026-10-27 09:05")).ready).toBe(false); // agreeing for 7 days, but no check in 15 minutes
+
+    await checkLedger(at("2026-10-27 09:01"));
+    expect(ledgerTrial(at("2026-10-27 09:05")).ready).toBe(true);
+
+    db().prepare("UPDATE stock_holdings SET shares = 1").run();
+    await checkLedger(at("2026-10-27 09:10"));
+    expect(open()["ledger:compare"]).toMatchObject({ level: "warning", detail: "2330（國泰）：舊 1，成本 500／帳本 1,000，成本 500,000" });
+    expect(ledgerTrial(at("2026-10-27 09:12"))).toMatchObject({ agreeing: false, since: null, ready: false });
+
+    db().prepare("UPDATE stock_holdings SET shares = 1000").run();
+    await checkLedger(at("2026-10-27 09:15"));
+    expect(open()["ledger:compare"]).toBeUndefined();
+    expect(ledgerTrial(at("2026-10-28 09:10")).days).toBeCloseTo(1, 6);
+  });
+
+  it("summarises a long list of differences", async () => {
+    for (const s of ["2330", "0050", "2317", "2454"]) holding(`tw:${s}`, 1, 1);
+    db().prepare("UPDATE stock_holdings SET shares = 2").run();
+    await checkLedger(at("2026-10-27 09:00"));
+    expect(open()["ledger:compare"].detail?.split("\n")).toHaveLength(4);
+    expect(open()["ledger:compare"].detail).toContain("…共 4 筆");
+  });
+});
+
 describe("runChecks", () => {
   it("runs every check and reports a failing one without skipping the rest", async () => {
-    insert("stock_holdings", { symbol: "2330", shares: 1 }); // no quote → feed alert
+    holding("tw:2330", 1, null); // no quote → feed alert
     db().exec("DROP TABLE snapshots"); // checkSnapshot will throw
     try {
       await expect(runChecks(at("2026-10-31 12:00"))).rejects.toThrow(/snapshot/);

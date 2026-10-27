@@ -17,10 +17,24 @@ import {
   verifyPassword,
 } from "./session";
 import { db } from "./db";
+import { twTradeCosts } from "./fees";
 import { tracked } from "./jobs";
+import { getTransaction, saveInstrument } from "./ledger";
+import { LEDGER_TRIAL_DAYS, ledgerTrial } from "./monitor";
 import { lookupTwStockName, refreshPrices, resolveCoin } from "./prices";
+import { setSetting } from "./settings";
 import { takeSnapshot } from "./snapshot";
 import { sendTelegram, telegramConfigured } from "./telegram";
+import {
+  accountByName,
+  addTransaction,
+  deleteAccount,
+  deleteTransaction,
+  LedgerError,
+  saveCashAccount,
+  updateAccount,
+  updateTransaction,
+} from "./transactions";
 import { sinopacConfigured, syncSinopac } from "./tw-futures";
 
 export type ActionState = { ok: boolean; error?: string } | null;
@@ -57,12 +71,15 @@ const FIELD_LABEL: Record<string, string> = {
   name: "名稱",
   currency: "幣別",
   balance: "餘額",
-  symbol: "股票代號",
-  shares: "股數",
-  avg_cost: "平均成本",
-  coin: "幣種",
-  amount: "數量",
-  avg_cost_twd: "平均成本",
+  symbol: "代號",
+  account: "帳戶",
+  type: "類型",
+  date: "日期",
+  price: "價格",
+  gross: "現金股利",
+  fee: "手續費",
+  tax: "稅",
+  fee_discount: "手續費折扣",
   cash_invested: "投入現金",
   estimated_value: "估計市值",
   loan_amount: "貸款金額",
@@ -98,6 +115,7 @@ async function guarded(fn: () => Promise<ActionState> | ActionState): Promise<Ac
     return await fn();
   } catch (e) {
     if (e instanceof z.ZodError) return { ok: false, error: firstError(e) };
+    if (e instanceof LedgerError) return { ok: false, error: e.message };
     console.error(e);
     return { ok: false, error: (e as Error).message };
   }
@@ -114,98 +132,127 @@ const CashSchema = z.object({
   note: text,
 });
 
+/** Create or edit a cash account; `id` is the ledger account. A changed balance is logged as an adjustment. */
 export async function saveCash(_: ActionState, fd: FormData): Promise<ActionState> {
   return guarded(async () => {
     const v = CashSchema.parse(fields(fd));
-    if (v.id) {
-      db()
-        .prepare(
-          `UPDATE cash_accounts SET name=@name, institution=@institution, currency=@currency, balance=@balance,
-           note=@note, updated_at=datetime('now') WHERE id=@id`,
-        )
-        .run(v);
-    } else {
-      db()
-        .prepare(
-          `INSERT INTO cash_accounts (name, institution, currency, balance, note)
-           VALUES (@name, @institution, @currency, @balance, @note)`,
-        )
-        .run(v);
-    }
+    saveCashAccount(v);
     if (v.currency !== "TWD") await refreshPrices();
     return done();
   });
 }
 
-// ---------- stocks ----------
+// ---------- stock & crypto transactions ----------
 
-const StockSchema = z.object({
+const TxSchema = z.object({
   id,
-  symbol: z.string().trim().toUpperCase().regex(/^[0-9A-Z]{4,6}$/, "台股代號，如 2330 / 00878"),
-  shares: num,
-  avg_cost: optNum,
-  broker: text,
+  kind: z.enum(["stock", "crypto"]),
+  account: z.string().trim().min(1, "必填"),
+  type: z.enum(["open", "buy", "sell", "dividend", "adjust"], { message: "請選擇類型" }),
+  symbol: z.string().trim().min(1, "必填"),
+  date: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "日期格式 YYYY-MM-DD"),
+  quantity: optNum,
+  price: optNum,
+  gross: optNum,
+  fee: optNum,
+  tax: optNum,
   note: text,
 });
 
-export async function saveStock(_: ActionState, fd: FormData): Promise<ActionState> {
-  return guarded(async () => {
-    const v = StockSchema.parse(fields(fd));
-    const name = await lookupTwStockName(v.symbol);
-    const row = { ...v, name };
-    if (v.id) {
-      db()
-        .prepare(
-          `UPDATE stock_holdings SET symbol=@symbol, name=COALESCE(@name, name), shares=@shares, avg_cost=@avg_cost,
-           broker=@broker, note=@note, updated_at=datetime('now') WHERE id=@id`,
-        )
-        .run(row);
-    } else {
-      db()
-        .prepare(
-          `INSERT INTO stock_holdings (symbol, name, shares, avg_cost, broker, note)
-           VALUES (@symbol, @name, @shares, @avg_cost, @broker, @note)`,
-        )
-        .run(row);
+const invalid = (field: string, message: string) => new LedgerError(`${FIELD_LABEL[field] ?? field}：${message}`);
+
+/** The quantity, price and cash leg of a form entry; fee and tax default to what a TW broker charges. */
+function txAmounts(v: z.infer<typeof TxSchema>, symbol: string, feeDiscount: number | null) {
+  const q = v.quantity;
+  switch (v.type) {
+    case "buy":
+    case "sell": {
+      if (q == null || !(q > 0)) throw invalid("quantity", "必須大於 0");
+      if (v.price == null || !(v.price > 0)) throw invalid("price", "必須大於 0");
+      const auto =
+        v.kind === "stock"
+          ? twTradeCosts({ side: v.type, symbol, shares: q, price: v.price, date: v.date, feeDiscount })
+          : { fee: 0, tax: 0 };
+      const fee = v.fee ?? auto.fee;
+      const tax = v.tax ?? auto.tax;
+      const value = q * v.price;
+      return v.type === "buy"
+        ? { quantity: q, price: v.price, amount: -(value + fee + tax), fee, tax }
+        : { quantity: -q, price: v.price, amount: value - fee - tax, fee, tax };
     }
+    case "dividend": {
+      if (v.kind !== "stock") throw new LedgerError("加密貨幣沒有股利");
+      const gross = v.gross ?? 0;
+      const shares = q ?? 0;
+      if (gross < 0) throw invalid("gross", "不能是負數");
+      if (shares < 0) throw invalid("quantity", "不能是負數");
+      if (!(gross > 0 || shares > 0)) throw invalid("gross", "現金股利或配股至少填一項");
+      const fee = v.fee ?? 0;
+      const tax = v.tax ?? 0;
+      return { quantity: shares, price: null, amount: gross - fee - tax, fee, tax };
+    }
+    case "adjust":
+      if (!q) throw invalid("quantity", "請填增減的數量，不能是 0");
+      return { quantity: q, price: null, amount: 0, fee: 0, tax: 0 };
+    case "open":
+      if (q == null || q < 0) throw invalid("quantity", "不能是負數");
+      if (v.price != null && v.price < 0) throw invalid("price", "不能是負數");
+      return { quantity: q, price: v.price, amount: 0, fee: 0, tax: 0 };
+  }
+}
+
+/** Record or edit one stock / coin transaction. The account is picked by name, and created if new. */
+export async function saveTransaction(_: ActionState, fd: FormData): Promise<ActionState> {
+  return guarded(async () => {
+    const v = TxSchema.parse(fields(fd));
+    if (v.type === "open" && (!v.id || getTransaction(v.id)?.type !== "open")) throw new LedgerError("期初只能修改，不能新增");
+    let asset: string;
+    let symbol: string;
+    if (v.kind === "stock") {
+      symbol = v.symbol.toUpperCase();
+      if (!/^[0-9A-Z]{4,6}$/.test(symbol)) throw invalid("symbol", "台股代號，如 2330 / 00878");
+      asset = `tw:${symbol}`;
+      saveInstrument(asset, symbol, await lookupTwStockName(symbol));
+    } else {
+      const coin = await resolveCoin(v.symbol);
+      if (!coin) return { ok: false, error: `CoinGecko 找不到「${v.symbol}」，請改輸入 CoinGecko coin id（例如 bitcoin）` };
+      asset = `crypto:${coin.id}`;
+      symbol = coin.symbol.toUpperCase();
+      saveInstrument(asset, symbol, coin.name);
+    }
+    const account = accountByName(v.kind, v.account);
+    const input = { accountId: account.id, date: v.date, type: v.type, asset, note: v.note, ...txAmounts(v, symbol, account.fee_discount) };
+    if (v.id) updateTransaction(v.id, input);
+    else addTransaction(input);
     await refreshPrices();
     return done();
   });
 }
 
-// ---------- crypto ----------
-
-const CryptoSchema = z.object({
-  id,
-  coin: z.string().trim().min(1, "必填"),
-  amount: num,
-  avg_cost_twd: optNum,
-  location: text,
+const AccountSchema = z.object({
+  id: z.coerce.number().int().positive(),
+  name: z.string().trim().min(1, "必填"),
+  institution: text,
+  // Entered the way brokers quote it: 2.8 折 is 2.8, i.e. 28% of the list rate.
+  fee_discount: optNum.refine((n) => n == null || (n > 0 && n <= 10), "填 0–10 的折數，例如 2.8"),
   note: text,
 });
 
-export async function saveCrypto(_: ActionState, fd: FormData): Promise<ActionState> {
-  return guarded(async () => {
-    const v = CryptoSchema.parse(fields(fd));
-    const coin = await resolveCoin(v.coin);
-    if (!coin) return { ok: false, error: `CoinGecko 找不到「${v.coin}」，請改輸入 CoinGecko coin id（例如 bitcoin）` };
-    const row = { ...v, coin_id: coin.id, symbol: coin.symbol.toUpperCase(), name: coin.name };
-    if (v.id) {
-      db()
-        .prepare(
-          `UPDATE crypto_holdings SET coin_id=@coin_id, symbol=@symbol, name=@name, amount=@amount,
-           avg_cost_twd=@avg_cost_twd, location=@location, note=@note, updated_at=datetime('now') WHERE id=@id`,
-        )
-        .run(row);
-    } else {
-      db()
-        .prepare(
-          `INSERT INTO crypto_holdings (coin_id, symbol, name, amount, avg_cost_twd, location, note)
-           VALUES (@coin_id, @symbol, @name, @amount, @avg_cost_twd, @location, @note)`,
-        )
-        .run(row);
+export async function saveAccount(_: ActionState, fd: FormData): Promise<ActionState> {
+  return guarded(() => {
+    const v = AccountSchema.parse(fields(fd));
+    updateAccount(v.id, { name: v.name, institution: v.institution, feeDiscount: v.fee_discount == null ? null : v.fee_discount / 10, note: v.note });
+    return done();
+  });
+}
+
+/** Make the ledger, or again the old tables, the source of every page's holdings. */
+export async function setLedgerMode(mode: "shadow" | "primary"): Promise<ActionState> {
+  return guarded(() => {
+    if (mode === "primary" && !ledgerTrial().ready) {
+      return { ok: false, error: `帳本要先和舊資料連續一致 ${LEDGER_TRIAL_DAYS} 天才能切換` };
     }
-    await refreshPrices();
+    setSetting("ledger_mode", mode === "primary" ? "primary" : "shadow");
     return done();
   });
 }
@@ -366,18 +413,20 @@ export async function saveProperty(_: ActionState, fd: FormData): Promise<Action
 // ---------- delete ----------
 
 const TABLES = {
-  cash: "cash_accounts",
-  stock: "stock_holdings",
-  crypto: "crypto_holdings",
   property: "properties",
   futuresAccount: "futures_accounts",
   futuresPosition: "futures_positions",
   twFutures: "tw_futures_accounts",
 } as const;
 
-export async function deleteItem(kind: keyof typeof TABLES, itemId: number): Promise<ActionState> {
+export type DeleteKind = keyof typeof TABLES | "account" | "transaction";
+
+export async function deleteItem(kind: DeleteKind, itemId: number): Promise<ActionState> {
   return guarded(() => {
-    const table = TABLES[kind];
+    if (kind === "account") deleteAccount(itemId);
+    else if (kind === "transaction") deleteTransaction(itemId);
+    if (kind === "account" || kind === "transaction") return done();
+    const table = Object.hasOwn(TABLES, kind) ? TABLES[kind] : undefined;
     if (!table) return { ok: false, error: "unknown kind" };
     db().prepare(`DELETE FROM ${table} WHERE id = ?`).run(itemId);
     return done();

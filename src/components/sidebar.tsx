@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { logout, logoutAll } from "@/lib/actions";
-import { IconCash, IconCrypto, IconFutures, IconHistory, IconHouse, IconLogout, IconOverview, IconPulse, IconStock } from "./icons";
+import { IconCash, IconCrypto, IconFutures, IconHistory, IconHouse, IconLedger, IconLogout, IconOverview, IconPulse, IconStock } from "./icons";
 import { Logo } from "./logo";
 
 const NAV = [
@@ -14,6 +14,8 @@ const NAV = [
   { href: "/cash", label: "現金", icon: IconCash },
   { href: "/real-estate", label: "房地產", icon: IconHouse },
   { href: "/history", label: "歷史快照", icon: IconHistory },
+  // The phone's bottom bar is full; there it's reached from 股票, 加密貨幣 and 現金.
+  { href: "/transactions", label: "交易紀錄", icon: IconLedger, desktopOnly: true },
 ];
 
 export function Sidebar({ authEnabled, alertCount }: { authEnabled: boolean; alertCount: number }) {
@@ -83,7 +85,7 @@ export function Sidebar({ authEnabled, alertCount }: { authEnabled: boolean; ale
 
       {/* Mobile bottom nav */}
       <nav className="fixed inset-x-0 bottom-0 z-20 flex border-t border-line bg-bg/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
-        {NAV.map(({ href, label, icon: Icon }) => (
+        {NAV.filter((n) => !n.desktopOnly).map(({ href, label, icon: Icon }) => (
           <Link
             key={href}
             href={href}

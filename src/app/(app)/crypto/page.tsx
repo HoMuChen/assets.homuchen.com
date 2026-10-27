@@ -1,9 +1,12 @@
-import { CryptoForm, FuturesAccountForm, FuturesPositionForm } from "@/components/forms";
+import Link from "next/link";
+import { FuturesAccountForm, FuturesPositionForm, TransactionForm } from "@/components/forms";
 import { RefreshBar } from "@/components/refresh-bar";
 import { SummaryStrip } from "@/components/summary-strip";
-import { Badge, Card, CardHeader, Delta, Empty, PageHeader, td, th, tr } from "@/components/ui";
+import { Badge, Card, CardHeader, Delta, Empty, HoldingLink, PageHeader, td, th, tr } from "@/components/ui";
 import { fmtNum, fmtPct, fmtPrice, fmtTime, fmtTwd, fmtUsdt } from "@/lib/format";
+import { getAccounts, ledgerIncome } from "@/lib/ledger";
 import { getPortfolio, type FuturesAccountView } from "@/lib/portfolio";
+import { taipeiDate } from "@/lib/time";
 
 /** Above this effective leverage the account gets a warning badge. */
 const HIGH_LEVERAGE = 10;
@@ -112,6 +115,9 @@ function FuturesAccountCard({ a, usdtTwd }: { a: FuturesAccountView; usdtTwd: nu
 export default function CryptoPage() {
   const p = getPortfolio();
   const t = p.totals;
+  const today = taipeiDate();
+  const accounts = getAccounts("crypto").map((a) => ({ name: a.name, feeDiscount: a.fee_discount }));
+  const realized = ledgerIncome("crypto", today.slice(0, 4)).realized;
   const rows = [...p.crypto].sort((a, b) => b.position.valueTwd - a.position.valueTwd);
   const cost = rows.reduce((a, r) => a + (r.position.costTwd ?? 0), 0);
   const valueWithCost = rows.filter((r) => r.position.costTwd != null).reduce((a, r) => a + r.position.valueTwd, 0);
@@ -134,7 +140,11 @@ export default function CryptoPage() {
               sub: hasFutures ? `現貨 ${fmtTwd(t.cryptoSpot)} · 合約權益 ${fmtTwd(t.cryptoFutures)}` : undefined,
             },
             { label: "24h 變動", value: <Delta value={day} pct={t.crypto ? (day / (t.crypto - day)) * 100 : null} /> },
-            { label: "現貨未實現損益", value: cost ? <Delta value={pnl} pct={(pnl / cost) * 100} /> : "—", sub: "僅計有填成本的部位" },
+            {
+              label: "現貨未實現損益",
+              value: cost ? <Delta value={pnl} pct={(pnl / cost) * 100} /> : "—",
+              sub: `${today.slice(0, 4)} 已實現 ${fmtTwd(realized)}`,
+            },
             {
               label: "合約未實現損益",
               value: hasFutures ? <Delta value={futuresUpnlUsdt * (p.usdtTwd ?? 0)} /> : "—",
@@ -145,9 +155,19 @@ export default function CryptoPage() {
 
         {/* Spot */}
         <Card className="overflow-hidden">
-          <CardHeader title="現貨" right={<CryptoForm />} />
+          <CardHeader
+            title="現貨"
+            right={
+              <div className="flex items-center gap-1">
+                <Link href="/transactions?kind=crypto" className="rounded px-2 py-1 text-[12px] text-fg-3 hover:bg-hover hover:text-fg">
+                  交易紀錄
+                </Link>
+                <TransactionForm kind="crypto" accounts={accounts} today={today} trigger="addSubtle" triggerLabel="記一筆" />
+              </div>
+            }
+          />
           {rows.length === 0 ? (
-            <Empty>尚未新增現貨。點「新增現貨」輸入幣種與數量。</Empty>
+            <Empty>尚未有現貨。點「記一筆」輸入第一筆買進。</Empty>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-[13px]">
@@ -168,14 +188,16 @@ export default function CryptoPage() {
                     const pos = r.position;
                     const gain = pos.costTwd != null ? pos.valueTwd - pos.costTwd : null;
                     return (
-                      <tr key={r.id} className={tr}>
+                      <tr key={pos.key} className={tr}>
                         <td className={td}>
                           <div className="flex items-center gap-2">
-                            <span className="text-fg">{r.symbol.toUpperCase()}</span>
-                            <span className="text-[12px] text-fg-4">{[r.name, r.location].filter(Boolean).join(" · ")}</span>
+                            <HoldingLink accountId={r.accountId} asset={r.asset}>
+                              <span className="text-fg">{r.symbol.toUpperCase()}</span>
+                            </HoldingLink>
+                            <span className="text-[12px] text-fg-4">{[r.name, r.account].filter(Boolean).join(" · ")}</span>
                           </div>
                         </td>
-                        <td className={`${td} num text-right`}>{fmtNum(r.amount, 8)}</td>
+                        <td className={`${td} num text-right`}>{fmtNum(r.quantity, 8)}</td>
                         <td className={`${td} num text-right`} title={`更新於 ${fmtTime(pos.price?.fetched_at)}`}>
                           {fmtPrice(pos.price?.price)}
                         </td>
@@ -188,7 +210,14 @@ export default function CryptoPage() {
                         </td>
                         <td className={`${td} num text-right text-fg-3`}>{t.crypto ? fmtPct((pos.valueTwd / t.crypto) * 100, false) : "—"}</td>
                         <td className={`${td} w-px text-right`}>
-                          <CryptoForm item={r} />
+                          <TransactionForm
+                            kind="crypto"
+                            accounts={accounts}
+                            today={today}
+                            preset={{ account: r.account, symbol: r.coinId }}
+                            trigger="edit"
+                            triggerLabel="交易"
+                          />
                         </td>
                       </tr>
                     );

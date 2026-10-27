@@ -25,6 +25,7 @@ describe("getStatus", () => {
     expect(s.sinopac).toEqual({ accounts: 1, configured: false, anyError: false, lastSyncAt: "2026-10-26T03:58:00.000Z" });
     expect(s.snapshot).toBeNull();
     expect(s).toMatchObject({ telegram: false, heartbeats: false, digest: "full", risk: { warning: 150, urgent: 100 } });
+    expect(s.ledger).toMatchObject({ mode: "shadow", checked: false, diffs: [] });
   });
 
   it("reports the health check as stale when it hasn't run for 15 minutes", () => {

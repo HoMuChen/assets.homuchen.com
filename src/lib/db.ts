@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
+import { taipeiDate } from "./time";
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), "data");
 
@@ -189,7 +190,145 @@ const MIGRATIONS: ((conn: Database.Database) => void)[] = [
         resolved_at TEXT
       );
     `),
+  // v3: the transaction ledger (src/lib/ledger.ts), seeded with today's holdings as opening balances.
+  (conn) => {
+    conn.exec(`
+      -- Where money or holdings sit: a bank account (cash), a broker (TW stocks), an exchange or wallet (crypto).
+      -- kind, source and transactions.type are open-ended (checked in the app): a CHECK can't be widened additively.
+      CREATE TABLE accounts (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind         TEXT NOT NULL,                 -- 'cash' | 'stock' | 'crypto'
+        name         TEXT NOT NULL,
+        institution  TEXT,
+        currency     TEXT NOT NULL DEFAULT 'TWD',   -- cash accounts: the balance's currency; others: TWD cost basis
+        fee_discount REAL,                          -- broker commission discount, e.g. 0.6 = 6 折; NULL = list price
+        source       TEXT NOT NULL DEFAULT 'manual',
+        external_ref TEXT,                          -- the account's id at a synced source
+        note         TEXT,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+      );
+
+      -- Every change to a holding or balance. A holding is the replay of its (account_id, asset) series by (date, id).
+      CREATE TABLE transactions (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        date        TEXT NOT NULL,                  -- trade date, YYYY-MM-DD in Asia/Taipei
+        type        TEXT NOT NULL,                  -- open | buy | sell | dividend | deposit | withdraw | fee | tax | adjust | funding
+        asset       TEXT,                           -- 'tw:2330' | 'crypto:bitcoin'; NULL = the account's own cash
+        quantity    REAL NOT NULL DEFAULT 0,        -- signed change in units of asset
+        price       REAL,                           -- per unit in account currency; NULL = unknown cost
+        amount      REAL NOT NULL DEFAULT 0,        -- signed cash leg net of fee and tax: + received, - paid
+        fee         REAL NOT NULL DEFAULT 0,
+        tax         REAL NOT NULL DEFAULT 0,
+        source      TEXT NOT NULL DEFAULT 'manual', -- manual | import | sinopac | bybit
+        external_id TEXT,                           -- id at the source, so a re-run sync can't write a duplicate
+        note        TEXT,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX transactions_source_ref ON transactions (source, external_id);
+      CREATE INDEX transactions_series ON transactions (account_id, asset, date);
+
+      -- Display names for ledger assets.
+      CREATE TABLE instruments (
+        asset  TEXT PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        name   TEXT
+      );
+
+      CREATE TABLE settings (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    // Until the ledger is switched on, the old tables stay the source of truth and are kept in step
+    // (src/lib/legacy.ts); account_id links each old row to its ledger account.
+    for (const t of ["cash_accounts", "stock_holdings", "crypto_holdings"]) addColumn(conn, t, "account_id", "INTEGER");
+    adoptLegacyRows(conn);
+  },
 ];
+
+/**
+ * Old-table rows without a ledger account become opening transactions dated today, so the ledger reproduces
+ * every number exactly. Seeds the ledger in v3, and on each start adopts rows a pre-ledger build wrote after
+ * a rollback. Returns how many rows it adopted.
+ */
+export function adoptLegacyRows(conn: Database.Database): number {
+  const now = new Date().toISOString();
+  const today = taipeiDate();
+  const account = conn.prepare(
+    `INSERT INTO accounts (kind, name, institution, currency, note, created_at, updated_at)
+     VALUES (@kind, @name, @institution, @currency, @note, @now, @now)`,
+  );
+  const open = conn.prepare(
+    `INSERT INTO transactions (account_id, date, type, asset, quantity, price, amount, note, created_at, updated_at)
+     VALUES (@account_id, @date, 'open', @asset, @quantity, @price, @amount, @note, @now, @now)`,
+  );
+  const instrument = conn.prepare(
+    "INSERT INTO instruments (asset, symbol, name) VALUES (?, ?, ?) ON CONFLICT(asset) DO UPDATE SET name = COALESCE(excluded.name, name)",
+  );
+  const addAccount = (a: { kind: string; name: string; institution?: string | null; currency?: string; note?: string | null }) =>
+    Number(account.run({ institution: null, currency: "TWD", note: null, ...a, now }).lastInsertRowid);
+  let adopted = 0;
+
+  for (const c of conn.prepare("SELECT * FROM cash_accounts WHERE account_id IS NULL ORDER BY id").all() as CashAccount[]) {
+    const id = addAccount({ kind: "cash", name: c.name, institution: c.institution, currency: c.currency, note: c.note });
+    conn.prepare("UPDATE cash_accounts SET account_id = ? WHERE id = ?").run(id, c.id);
+    open.run({ account_id: id, date: today, asset: null, quantity: 0, price: null, amount: c.balance, note: null, now });
+    adopted++;
+  }
+
+  // One account per broker / storage location as typed in the old forms.
+  const seed = <T extends { id: number }>(
+    table: string,
+    kind: string,
+    rows: T[],
+    group: (r: T) => string | null,
+    fallback: string,
+    row: (r: T) => { asset: string; symbol: string; name: string | null; quantity: number; price: number | null; note: string | null },
+  ) => {
+    for (const r of rows) {
+      const label = group(r);
+      const name = label ?? fallback;
+      const existing = conn.prepare("SELECT id FROM accounts WHERE kind = ? AND name = ? ORDER BY id LIMIT 1").get(kind, name) as
+        | { id: number }
+        | undefined;
+      const id = existing?.id ?? addAccount({ kind, name, institution: label });
+      conn.prepare(`UPDATE ${table} SET account_id = ? WHERE id = ?`).run(id, r.id);
+      const { symbol, name: assetName, ...tx } = row(r);
+      instrument.run(tx.asset, symbol, assetName);
+      open.run({ ...tx, account_id: id, date: today, amount: 0, now });
+      adopted++;
+    }
+  };
+  seed(
+    "stock_holdings",
+    "stock",
+    conn.prepare("SELECT * FROM stock_holdings WHERE account_id IS NULL ORDER BY id").all() as StockHolding[],
+    (h) => h.broker,
+    "台股",
+    (h) => ({ asset: `tw:${h.symbol}`, symbol: h.symbol, name: h.name, quantity: h.shares, price: h.avg_cost, note: h.note }),
+  );
+  seed(
+    "crypto_holdings",
+    "crypto",
+    conn.prepare("SELECT * FROM crypto_holdings WHERE account_id IS NULL ORDER BY id").all() as CryptoHolding[],
+    (h) => h.location,
+    "加密貨幣",
+    (h) => ({
+      asset: `crypto:${h.coin_id}`,
+      symbol: h.symbol.toUpperCase(),
+      name: h.name,
+      quantity: h.amount,
+      price: h.avg_cost_twd,
+      note: h.note,
+    }),
+  );
+  conn.prepare("INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('ledger_started_at', ?, ?)").run(now, now);
+  return adopted;
+}
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
@@ -218,6 +357,10 @@ export function db(): Database.Database {
     conn.pragma("busy_timeout = 5000");
     conn.pragma("foreign_keys = ON");
     migrate(conn);
+    if ((conn.pragma("user_version", { simple: true }) as number) >= 3) {
+      const adopted = conn.transaction(adoptLegacyRows)(conn);
+      if (adopted) console.warn(`[db] adopted ${adopted} holding row(s) written without the ledger (rolled back?)`);
+    }
     globalForDb.__assetsDb = conn;
   }
   return globalForDb.__assetsDb;
@@ -230,6 +373,8 @@ export type CashAccount = {
   currency: string;
   balance: number;
   note: string | null;
+  /** Ledger account this row mirrors; NULL only for rows written by a pre-ledger build. */
+  account_id: number | null;
 };
 
 export type StockHolding = {
@@ -240,6 +385,8 @@ export type StockHolding = {
   avg_cost: number | null;
   broker: string | null;
   note: string | null;
+  /** Ledger account this row mirrors; NULL only for rows written by a pre-ledger build. */
+  account_id: number | null;
 };
 
 export type CryptoHolding = {
@@ -251,6 +398,8 @@ export type CryptoHolding = {
   avg_cost_twd: number | null;
   location: string | null;
   note: string | null;
+  /** Ledger account this row mirrors; NULL only for rows written by a pre-ledger build. */
+  account_id: number | null;
 };
 
 export type Property = {
@@ -351,3 +500,41 @@ export type AlertRow = {
   notified_at: string | null;
   resolved_at: string | null;
 };
+
+export type AccountKind = "cash" | "stock" | "crypto";
+
+export type Account = {
+  id: number;
+  kind: AccountKind;
+  name: string;
+  institution: string | null;
+  currency: string;
+  fee_discount: number | null;
+  source: string;
+  external_ref: string | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TxType = "open" | "buy" | "sell" | "dividend" | "deposit" | "withdraw" | "fee" | "tax" | "adjust" | "funding";
+
+export type Transaction = {
+  id: number;
+  account_id: number;
+  date: string;
+  type: TxType;
+  asset: string | null;
+  quantity: number;
+  price: number | null;
+  amount: number;
+  fee: number;
+  tax: number;
+  source: string;
+  external_id: string | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Instrument = { asset: string; symbol: string; name: string | null };

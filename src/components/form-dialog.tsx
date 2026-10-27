@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
-import { deleteItem, type ActionState } from "@/lib/actions";
+import { deleteItem, type ActionState, type DeleteKind } from "@/lib/actions";
 import { IconPlus } from "./icons";
 
 type Action = (state: ActionState, fd: FormData) => Promise<ActionState>;
@@ -32,6 +32,7 @@ export function FormDialog({
   triggerLabel,
   deleteKind,
   deleteId,
+  deleteWarning,
 }: {
   title: string;
   action: Action;
@@ -39,8 +40,10 @@ export function FormDialog({
   /** add = primary button, addSubtle = secondary button, edit = text link */
   trigger?: "add" | "addSubtle" | "edit";
   triggerLabel?: string;
-  deleteKind?: Parameters<typeof deleteItem>[0];
+  deleteKind?: DeleteKind;
   deleteId?: number;
+  /** Appended to the delete confirmation, e.g. what else goes with it. */
+  deleteWarning?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -50,6 +53,7 @@ export function FormDialog({
   const [openKey, setOpenKey] = useState(0);
   // Only show an error for a submission made in the currently open dialog.
   const [submittedKey, setSubmittedKey] = useState(-1);
+  const [deleteError, setDeleteError] = useState<{ key: number; text: string } | null>(null);
 
   useEffect(() => {
     if (state?.ok) {
@@ -103,15 +107,19 @@ export function FormDialog({
           {state && !state.ok && submittedKey === openKey && (
             <p className="mx-5 mb-3 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">{state.error}</p>
           )}
+          {deleteError?.key === openKey && (
+            <p className="mx-5 mb-3 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">{deleteError.text}</p>
+          )}
           <div className="flex items-center gap-2 border-t border-line px-5 py-3">
             {deleteKind && deleteId != null && (
               <button
                 type="button"
                 disabled={deleting}
                 onClick={() => {
-                  if (!confirm("確定要刪除這筆資料嗎？")) return;
+                  if (!confirm(`確定要刪除這筆資料嗎？${deleteWarning ?? ""}`)) return;
                   startDelete(async () => {
-                    await deleteItem(deleteKind, deleteId);
+                    const r = await deleteItem(deleteKind, deleteId);
+                    if (r && !r.ok) return setDeleteError({ key: openKey, text: r.error ?? "刪除失敗" });
                     ref.current?.close();
                     router.refresh();
                   });

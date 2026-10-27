@@ -1,5 +1,7 @@
 import { db, type PriceRow } from "./db";
 import { recordRun } from "./jobs";
+import { assetId } from "./tx";
+import { getHoldings } from "./holdings";
 import { isTwMarketOpen, taipeiDate } from "./time";
 import { sinopacStale, syncSinopac } from "./tw-futures";
 
@@ -155,19 +157,15 @@ export function refreshPrices(opts: { force?: boolean } = {}): Promise<RefreshRe
 /** What the current holdings need quotes for (stock symbols, CoinGecko ids, non-TWD currencies). */
 export function heldInstruments(): { symbols: string[]; coinIds: string[]; currencies: string[] } {
   const conn = db();
-  const symbols = (conn.prepare("SELECT DISTINCT symbol FROM stock_holdings").all() as { symbol: string }[]).map((r) => r.symbol);
-  const coinIds = new Set(
-    (
-      conn
-        .prepare("SELECT coin_id FROM crypto_holdings UNION SELECT coin_id FROM futures_positions")
-        .all() as { coin_id: string }[]
-    ).map((r) => r.coin_id),
-  );
+  const held = getHoldings();
+  const symbols = [...new Set(held.stocks.map((h) => assetId(h.asset)))];
+  const coinIds = new Set([
+    ...held.crypto.map((h) => assetId(h.asset)),
+    ...(conn.prepare("SELECT DISTINCT coin_id FROM futures_positions").all() as { coin_id: string }[]).map((r) => r.coin_id),
+  ]);
   // USDT's TWD price converts futures equity into TWD.
   if (conn.prepare("SELECT 1 FROM futures_accounts LIMIT 1").get()) coinIds.add(USDT_COIN_ID);
-  const currencies = (
-    conn.prepare("SELECT DISTINCT currency FROM cash_accounts WHERE currency != 'TWD'").all() as { currency: string }[]
-  ).map((r) => r.currency);
+  const currencies = [...new Set(held.cash.map((c) => c.currency).filter((c) => c !== "TWD"))];
   return { symbols, coinIds: [...coinIds], currencies };
 }
 

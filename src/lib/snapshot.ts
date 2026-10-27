@@ -12,8 +12,8 @@ export async function takeSnapshot(): Promise<SnapshotRow> {
   const detail = {
     positions: [
       ...p.cash.map((c) => c.position),
-      ...p.stocks.map((s) => ({ ...s.position, quantity: s.shares, price: s.position.price?.price ?? null })),
-      ...p.crypto.map((c) => ({ ...c.position, quantity: c.amount, price: c.position.price?.price ?? null })),
+      ...p.stocks.map((s) => ({ ...s.position, quantity: s.quantity, price: s.position.price?.price ?? null })),
+      ...p.crypto.map((c) => ({ ...c.position, quantity: c.quantity, price: c.position.price?.price ?? null })),
     ].map(({ category, key, name, valueTwd, ...rest }) => ({
       category,
       key,

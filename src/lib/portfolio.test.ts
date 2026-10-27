@@ -1,19 +1,22 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { insert, resetDb, setPrice } from "@/test/helpers";
+import { cashAccount, holding, insert, resetDb, setPrice } from "@/test/helpers";
 import { getPortfolio } from "./portfolio";
+import { setSetting } from "./settings";
 
 beforeEach(resetDb);
 
-describe("getPortfolio", () => {
+// Both sources of holdings must value everything identically; that's what makes the switch safe.
+describe.each(["shadow", "primary"] as const)("getPortfolio (%s)", (mode) => {
   beforeEach(() => {
-    insert("cash_accounts", { name: "薪轉", currency: "TWD", balance: 100_000 });
-    insert("cash_accounts", { name: "美元戶", currency: "USD", balance: 1_000 });
+    setSetting("ledger_mode", mode);
+    cashAccount("薪轉", 100_000);
+    cashAccount("美元戶", 1_000, "USD");
     setPrice("fx:USD", 32);
 
-    insert("stock_holdings", { symbol: "2330", name: "台積電", shares: 1_000, avg_cost: 500 });
+    holding("tw:2330", 1_000, 500, { name: "台積電" });
     setPrice("tw:2330", 1_000, { changePct: 2 });
 
-    insert("crypto_holdings", { coin_id: "bitcoin", symbol: "btc", amount: 0.5, avg_cost_twd: 2_000_000 });
+    holding("crypto:bitcoin", 0.5, 2_000_000, { symbol: "BTC", name: "Bitcoin" });
     setPrice("crypto:bitcoin", 3_000_000, { changePct: -5 });
     setPrice("crypto:ethereum", 112_000);
 
@@ -44,7 +47,9 @@ describe("getPortfolio", () => {
   });
 
   it("values stocks at the quote, with cost basis and the day's change backed out of change_pct", () => {
-    const s = getPortfolio().stocks[0].position;
+    const [stock] = getPortfolio().stocks;
+    expect(stock).toMatchObject({ symbol: "2330", name: "台積電", account: "國泰", quantity: 1_000, avgCost: 500 });
+    const s = stock.position;
     expect(s.valueTwd).toBe(1_000_000);
     expect(s.costTwd).toBe(500_000);
     expect(s.dayChangeTwd).toBeCloseTo(1_000_000 - 1_000_000 / 1.02, 6);
@@ -88,7 +93,7 @@ describe("getPortfolio", () => {
   });
 
   it("counts a holding without any quote as 0 and lists it as missing", () => {
-    insert("stock_holdings", { symbol: "0050", shares: 100 });
+    holding("tw:0050", 100, null);
     const p = getPortfolio();
     expect(p.missingPrices).toContain("0050");
     expect(p.totals.stocks).toBe(1_000_000);

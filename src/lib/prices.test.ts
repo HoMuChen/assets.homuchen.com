@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { insert, mockFetch, resetDb, setPrice } from "@/test/helpers";
+import { cashAccount, holding, mockFetch, resetDb, setPrice } from "@/test/helpers";
 import { getRuns, isFailing } from "./jobs";
 import { getPriceMap, refreshPrices } from "./prices";
 
 beforeEach(() => {
   resetDb();
-  insert("stock_holdings", { symbol: "2330", shares: 1 });
-  insert("crypto_holdings", { coin_id: "bitcoin", symbol: "btc", amount: 1 });
-  insert("cash_accounts", { name: "美元戶", currency: "USD", balance: 1 });
+  holding("tw:2330", 1, null);
+  holding("crypto:bitcoin", 1, null);
+  cashAccount("美元戶", 1, "USD");
 });
 
 const finmindSnapshot = (close: number, changeRate: number) =>

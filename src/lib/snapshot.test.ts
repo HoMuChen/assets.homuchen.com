@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { insert, mockFetch, resetDb, setPrice } from "@/test/helpers";
+import { cashAccount, holding, insert, mockFetch, resetDb, setPrice } from "@/test/helpers";
 import { getSnapshots, hasSnapshot, takeSnapshot } from "./snapshot";
 import { taipeiDate } from "./time";
 
@@ -7,8 +7,8 @@ beforeEach(resetDb);
 
 describe("takeSnapshot", () => {
   it("writes today's totals from the last good quotes even when every feed is down", async () => {
-    insert("cash_accounts", { name: "薪轉", currency: "TWD", balance: 50_000 });
-    insert("stock_holdings", { symbol: "2330", name: "台積電", shares: 100 });
+    cashAccount("薪轉", 50_000);
+    holding("tw:2330", 100, null, { name: "台積電" });
     setPrice("tw:2330", 1_000);
     insert("properties", { name: "家", cash_invested: 1_000_000, loan_amount: 4_000_000, annual_rate: 2, term_months: 360 });
     mockFetch([[/./, () => new Response("down", { status: 503 })]]);
@@ -24,15 +24,15 @@ describe("takeSnapshot", () => {
       net_worth: 1_150_000,
     });
     const detail = JSON.parse(row.detail);
-    expect(detail.positions).toContainEqual(expect.objectContaining({ key: expect.stringMatching(/^tw:/), quantity: 100, price: 1_000 }));
+    expect(detail.positions).toContainEqual(expect.objectContaining({ key: expect.stringMatching(/^stock:\d+:tw:2330$/), quantity: 100, price: 1_000 }));
     expect(detail.properties[0]).toMatchObject({ equity: 1_000_000 });
   });
 
   it("overwrites the same day instead of adding a row", async () => {
     mockFetch([[/./, () => new Response("down", { status: 503 })]]);
-    insert("cash_accounts", { name: "薪轉", currency: "TWD", balance: 1 });
+    cashAccount("薪轉", 1);
     await takeSnapshot();
-    insert("cash_accounts", { name: "定存", currency: "TWD", balance: 2 });
+    cashAccount("定存", 2);
     await takeSnapshot();
 
     const rows = getSnapshots();
