@@ -4,7 +4,8 @@ import path from "node:path";
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), "data");
 
-const SCHEMA = `
+/** The schema as it stood when versioning began (v1). Later changes go in MIGRATIONS, never here. */
+const BASELINE = `
 CREATE TABLE IF NOT EXISTS cash_accounts (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   name        TEXT NOT NULL,
@@ -148,15 +149,37 @@ CREATE TABLE IF NOT EXISTS snapshots (
 );
 `;
 
-/** Columns added after a table first shipped; CREATE TABLE IF NOT EXISTS won't add them to an existing db. */
-const ADDED_COLUMNS: { table: string; column: string; ddl: string }[] = [
-  { table: "snapshots", column: "tw_futures", ddl: "REAL NOT NULL DEFAULT 0" },
+function addColumn(conn: Database.Database, table: string, column: string, ddl: string) {
+  const cols = conn.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === column)) conn.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+}
+
+/**
+ * Append-only: entry i takes the database from schema version i to i + 1 (PRAGMA user_version).
+ * Keep every step additive (new tables, defaulted columns) so a rolled-back image still runs on the newer schema.
+ */
+const MIGRATIONS: ((conn: Database.Database) => void)[] = [
+  // v1: baseline. Databases from before versioning already hold some of it; IF NOT EXISTS and addColumn adopt them.
+  (conn) => {
+    conn.exec(BASELINE);
+    addColumn(conn, "snapshots", "tw_futures", "REAL NOT NULL DEFAULT 0");
+  },
 ];
 
-function migrate(conn: Database.Database) {
-  for (const { table, column, ddl } of ADDED_COLUMNS) {
-    const cols = conn.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-    if (!cols.some((c) => c.name === column)) conn.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+export const SCHEMA_VERSION = MIGRATIONS.length;
+
+export function migrate(conn: Database.Database) {
+  const from = conn.pragma("user_version", { simple: true }) as number;
+  if (from > SCHEMA_VERSION) {
+    console.warn(`[db] schema v${from} is newer than this build's v${SCHEMA_VERSION} (rolled back?); running anyway`);
+    return;
+  }
+  for (let v = from; v < SCHEMA_VERSION; v++) {
+    conn.transaction(() => {
+      MIGRATIONS[v](conn);
+      conn.pragma(`user_version = ${v + 1}`);
+    })();
+    console.log(`[db] migrated schema to v${v + 1}`);
   }
 }
 
@@ -169,7 +192,6 @@ export function db(): Database.Database {
     conn.pragma("journal_mode = WAL");
     conn.pragma("busy_timeout = 5000");
     conn.pragma("foreign_keys = ON");
-    conn.exec(SCHEMA);
     migrate(conn);
     globalForDb.__assetsDb = conn;
   }

@@ -109,9 +109,17 @@ SJ_API_KEY=... SJ_SEC_KEY=... SINOPAC_PORT=8765 uv run --with shioaji==1.7.2 pyt
 SINOPAC_URL=http://127.0.0.1:8765 npm run dev
 ```
 
+測試（vitest，每個測試檔用自己的暫存 SQLite，外部 API 一律 mock，不會打網路）：
+
+```bash
+npm test                 # 全部跑一次
+npm run test:watch       # 開發時
+npm run test:coverage    # CI 跑這個
+```
+
 ## 架構
 
 - Next.js 16（App Router, Server Actions）+ Tailwind v4 + Recharts
-- `better-sqlite3`，schema 在 `src/lib/db.ts` 啟動時自動建立
+- `better-sqlite3`，schema 在 `src/lib/db.ts`：`MIGRATIONS` 依序執行，版本記在 `PRAGMA user_version`。改 schema 一律**新增**一個 migration（不要改舊的），而且只做加法（新表、有預設值的欄位），這樣部署失敗回滾到舊版時，舊程式還能在新 schema 上跑
 - `src/instrumentation.ts` 啟動 `node-cron` 排程（`src/lib/scheduler.ts`）
 - `src/lib/prices.ts` 報價抓取與快取，`src/lib/portfolio.ts` 彙總，`src/lib/snapshot.ts` 每日快照
