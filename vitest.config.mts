@@ -12,6 +12,8 @@ export default defineConfig({
       provider: "v8",
       include: ["src/lib/**/*.ts"],
       reporter: ["text-summary", "text"],
+      // The money math, alerting and auth live here; CI fails if coverage slips below this.
+      thresholds: { lines: 80, statements: 80 },
     },
   },
 });

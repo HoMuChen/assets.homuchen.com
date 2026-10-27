@@ -16,7 +16,8 @@ export function proxy(request: NextRequest) {
 export const config = {
   // Exact-match the public paths (`$`) so look-alikes such as /login-x still require a session.
   // The PWA files must be public too: browsers fetch the manifest and icons without cookies.
+  // api/heartbeat checks its own bearer token (HEARTBEAT_TOKEN).
   matcher: [
-    "/((?!login$|api/health$|_next/static|_next/image|favicon\\.ico$|icon\\.svg$|apple-icon\\.png$|manifest\\.webmanifest$|sw\\.js$|offline\\.html$|icons/).*)",
+    "/((?!login$|api/health$|api/heartbeat$|_next/static|_next/image|favicon\\.ico$|icon\\.svg$|apple-icon\\.png$|manifest\\.webmanifest$|sw\\.js$|offline\\.html$|icons/).*)",
   ],
 };

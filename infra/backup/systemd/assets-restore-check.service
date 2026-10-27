@@ -1,0 +1,11 @@
+# Weekly restore drill of the newest R2 backup. Logs: journalctl -u assets-restore-check
+[Unit]
+Description=assets backup restore check
+
+[Service]
+Type=oneshot
+User=deploy
+Group=deploy
+Environment=ASSETS_HOME=/opt/assets
+ExecStart=/opt/assets/restore-check.sh
+TimeoutStartSec=15min

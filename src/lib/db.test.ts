@@ -13,7 +13,7 @@ describe("schema migrations", () => {
 
   it("brings a new database to the latest version", () => {
     expect(db().pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION);
-    expect(tables(db())).toEqual(expect.arrayContaining(["snapshots", "prices", "sessions"]));
+    expect(tables(db())).toEqual(expect.arrayContaining(["snapshots", "prices", "sessions", "job_runs", "alerts"]));
   });
 
   it("adopts a database from before versioning without losing data", () => {
@@ -37,7 +37,7 @@ describe("schema migrations", () => {
     expect(columns(conn, "snapshots")).toContain("tw_futures");
     expect(conn.prepare("SELECT tw_futures FROM snapshots").get()).toEqual({ tw_futures: 0 });
     expect(conn.prepare("SELECT name, balance FROM cash_accounts").get()).toEqual({ name: "薪轉", balance: 123456 });
-    expect(tables(conn)).toEqual(expect.arrayContaining(["stock_holdings", "tw_futures_accounts"]));
+    expect(tables(conn)).toEqual(expect.arrayContaining(["stock_holdings", "tw_futures_accounts", "job_runs", "alerts"]));
   });
 
   it("is a no-op when already current", () => {

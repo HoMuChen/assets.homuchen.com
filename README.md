@@ -5,8 +5,15 @@
 - **即時報價**：台股走 FinMind `taiwan_stock_tick_snapshot`（sponsor 方案，約 10 秒更新；失敗時退回最新收盤價並標示「收盤價」），加密貨幣走 CoinGecko，外幣匯率走 open.er-api.com。頁面開著時每 30 秒更新一次。
 - **每日快照**：每天 23:55（台北時間）自動記錄一次；伺服器啟動時若當天還沒有快照也會補一筆。`歷史快照` 頁可手動觸發。
 - **合約（U 本位）**：每個合約帳戶記錄錢包餘額 (USDT)，底下記錄持倉（方向、數量、開倉均價、槓桿）。淨資產只計入**權益 = 錢包餘額＋未實現損益**，名目價值只用來顯示曝險與實際槓桿；加密貨幣頁另有現貨＋合約的每幣淨曝險。現價以 CoinGecko USD 價格 ÷ USDT 價格估算，和交易所標記價格會有些微差距。
-- **台灣期貨**：每個期貨帳戶只計入**權益數**（帳戶餘額＋未平倉損益）。來源二選一：手動輸入（例如台新），或永豐 API 自動同步（權益數、未平倉損益、可用保證金、風險指標；期貨交易時段每 5 分鐘、其餘每小時，同步失敗時保留上一次的數字）。永豐走 `sinopac/server.py` 這個 sidecar：用 Shioaji 維持一個登入中的 session，只提供 `GET /margin`，只在 compose 內部網路可連；金鑰請用**沒有「交易」權限**、IP 限定 VM 的唯讀 key。
+- **台灣期貨**：每個期貨帳戶只計入**權益數**（帳戶餘額＋未平倉損益）。來源二選一：手動輸入（例如台新），或永豐 API 自動同步（權益數、未平倉損益、可用保證金、風險指標；期貨交易時段每 3 分鐘、其餘每小時，同步失敗時保留上一次的數字）。永豐走 `sinopac/server.py` 這個 sidecar：用 Shioaji 維持一個登入中的 session，只提供 `GET /margin`，只在 compose 內部網路可連；金鑰請用**沒有「交易」權限**、IP 限定 VM 的唯讀 key。
 - **房貸**：依撥款日、利率、年限、寬限期自動計算剩餘本金（本息平均攤還）；有提前還款時可手動覆寫剩餘本金。
+- **告警與系統狀態**：每 5 分鐘做一次健康檢查，有狀況就發 Telegram，並記在 `系統狀態` 頁（`/status`，總覽頁也會出現提示條）。檢查項目：
+  - 永豐期貨**追繳**、**風險指標**低於門檻（預設 150% 警示、100% 緊急；期貨盤中每 3 分鐘同步完立刻檢查）
+  - 永豐同步持續失敗、台股／加密貨幣／匯率報價中斷（持有的標的超過更新週期沒有新報價）
+  - 每日快照沒跑或失敗、VM 上的資料庫備份與每週還原演練失敗或沒有按時回報
+  - 同一個告警持續時，緊急的每 30 分鐘、警示的每 12 小時再提醒一次；解除時發「已恢復」。00:00–07:00 的警示靜音送達，緊急的照常響。
+  - 每晚 23:55 快照後發一則**每日摘要**，預設只有百分比（Telegram 不是端對端加密），`TELEGRAM_DIGEST=full` 才帶金額。
+  - 設定：用 [@BotFather](https://t.me/BotFather) 建 bot，把它加進要收通知的聊天（自己或家庭群組）並傳一則訊息，再從 `https://api.telegram.org/bot<token>/getUpdates` 找到 `chat.id`，填 `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`。`系統狀態` 頁右上角可以傳測試訊息。
 - **安裝到手機（PWA）**：iPhone 用 Safari 開啟 → 分享 →「加入主畫面」；Android 用 Chrome 開啟 → 選單 →「安裝應用程式」。以全螢幕開啟，底部導覽會避開 home indicator。Service worker（`public/sw.js`）只在斷線時顯示離線頁，**不快取任何資料頁**，資產數字一律即時抓。iOS 主畫面 app 的 cookie 與 Safari 分開，第一次開啟要再登入一次。
 - **漲跌顏色**：台灣慣例紅漲綠跌，並附 ▲▼ 符號。要改成國際慣例，對調 `src/app/globals.css` 的 `--up` / `--down`。
 
@@ -28,11 +35,13 @@ gh workflow run Deploy [-f sha=xxxxxxx]
 
 `assets-deploy.timer` 每 10 分鐘補檢查一次 `:prod`；`assets-backup.timer` 每天 03:30（台北）把 SQLite
 備份到 R2 的 `backup/assets/`（各服務共用的 `backup` bucket，一個服務一個資料夾，HQ 在 `headquarter/`），保留最近 14 份＋近 12 個月每月一份。
+`assets-restore-check.timer` 每週日 04:30 把最新一份備份從 R2 抓回來還原到暫存檔，檢查 integrity、schema 版本與最近的快照日期（不碰正式資料庫）。
+兩者都會把結果 POST 到 app 的 `/api/heartbeat`（`127.0.0.1:3100`，帶 `HEARTBEAT_TOKEN`；edge Caddy 對外一律擋掉這個路徑），失敗或沒有按時回報就會發 Telegram。
 
 | VM 上的路徑 | 內容 |
 | --- | --- |
 | `/opt/assets/.env` | 給 container 的設定（`FINMIND_TOKEN`、`APP_PASSWORD`…），範本 `infra/vm/env.production.example` |
-| `/opt/assets/backup.env` | R2 金鑰，只給 `backup.sh`，範本 `infra/vm/backup.env.example` |
+| `/opt/assets/backup.env` | R2 金鑰與 `HEARTBEAT_TOKEN`，只給 `backup.sh`、`restore-check.sh`，範本 `infra/vm/backup.env.example` |
 | `/opt/assets/sinopac.env` | 永豐唯讀 API key（`SJ_API_KEY`、`SJ_SEC_KEY`），只給 sinopac sidecar，範本 `infra/vm/sinopac.env.example` |
 | `/opt/assets/data/assets.db` | SQLite（container 的 `/data`） |
 | `/opt/assets/state/`、`releases.log` | 部署狀態與紀錄，同 HQ |
@@ -44,7 +53,7 @@ gh workflow run Deploy [-f sha=xxxxxxx]
 rsync -a --delete infra/ hq:/root/assets-infra/
 ssh hq /root/assets-infra/vm/setup.sh          # 先跑過 homuchen-edge 與 HQ 的 setup.sh
 # 填 /opt/assets/.env、/opt/assets/backup.env
-ssh hq 'sudo -u deploy /opt/assets/deploy.sh sha-<7碼> && systemctl enable --now assets-deploy.timer assets-backup.timer'
+ssh hq 'sudo -u deploy /opt/assets/deploy.sh sha-<7碼> && systemctl enable --now assets-deploy.timer assets-backup.timer assets-restore-check.timer'
 ```
 
 GitHub：secret `DEPLOY_WEBHOOK_SECRET`（VM 的 `/etc/assets/deploy-webhook.env`）、variable `DEPLOY_URL=https://assets.homuchen.com`。
@@ -56,6 +65,7 @@ GitHub：secret `DEPLOY_WEBHOOK_SECRET`（VM 的 `/etc/assets/deploy-webhook.env
 gh workflow run Deploy                       # 部署 main 最新版；-f sha=<7碼> 回到舊版
 ssh hq journalctl -u assets-deploy -n 50     # 部署紀錄（也看 /opt/assets/releases.log）
 ssh hq journalctl -u assets-backup -n 20     # 備份紀錄
+ssh hq journalctl -u assets-restore-check -n 20   # 還原演練紀錄；要馬上跑一次：ssh hq systemctl start assets-restore-check
 ssh hq 'cd /opt/assets && ASSETS_IMAGE=$(cat state/current) docker compose -p assets -f app/compose.prod.yml logs -f --tail 100'
 ```
 
@@ -93,6 +103,10 @@ docker compose up -d --build                 # http://localhost:3000；純 HTTP 
 | `COOKIE_SECURE` | 預設 `true`；純 HTTP 時設 `false` |
 | `DATA_DIR` | SQLite 存放位置，容器內預設 `/data` |
 | `DISABLE_SCHEDULER` | 設 `true` 可停用排程（例如同時跑多個實例時） |
+| `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID` | 告警與每日摘要送到哪裡；沒設定時告警只記在 `系統狀態` 頁 |
+| `TELEGRAM_DIGEST` | 每日摘要：`pct`（預設，只有百分比）、`full`（含金額）、`off` |
+| `ALERT_TW_RISK_WARN`、`ALERT_TW_RISK_URGENT` | 期貨風險指標告警門檻（%），預設 150、100 |
+| `HEARTBEAT_TOKEN` | VM 上的備份與還原演練回報用，要和 `backup.env` 裡的同值（`openssl rand -hex 32`）；沒設定時不檢查備份 |
 
 ## 本機開發
 
@@ -114,7 +128,7 @@ SINOPAC_URL=http://127.0.0.1:8765 npm run dev
 ```bash
 npm test                 # 全部跑一次
 npm run test:watch       # 開發時
-npm run test:coverage    # CI 跑這個
+npm run test:coverage    # CI 跑這個；src/lib 行覆蓋率低於 80% 會失敗
 ```
 
 ## 架構
@@ -123,3 +137,4 @@ npm run test:coverage    # CI 跑這個
 - `better-sqlite3`，schema 在 `src/lib/db.ts`：`MIGRATIONS` 依序執行，版本記在 `PRAGMA user_version`。改 schema 一律**新增**一個 migration（不要改舊的），而且只做加法（新表、有預設值的欄位），這樣部署失敗回滾到舊版時，舊程式還能在新 schema 上跑
 - `src/instrumentation.ts` 啟動 `node-cron` 排程（`src/lib/scheduler.ts`）
 - `src/lib/prices.ts` 報價抓取與快取，`src/lib/portfolio.ts` 彙總，`src/lib/snapshot.ts` 每日快照
+- `src/lib/monitor.ts` 健康檢查，`src/lib/alerts.ts` 告警狀態（開啟、重送、解除），`src/lib/telegram.ts` 發送，`src/lib/jobs.ts` 記錄每個排程、報價來源與 VM 回報的最後結果

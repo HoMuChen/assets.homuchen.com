@@ -1,4 +1,5 @@
 import { db, type PriceRow } from "./db";
+import { recordRun } from "./jobs";
 import { isTwMarketOpen, taipeiDate } from "./time";
 import { sinopacStale, syncSinopac } from "./tw-futures";
 
@@ -151,15 +152,10 @@ export function refreshPrices(opts: { force?: boolean } = {}): Promise<RefreshRe
   return inFlight;
 }
 
-async function doRefresh(force: boolean): Promise<RefreshResult> {
+/** What the current holdings need quotes for (stock symbols, CoinGecko ids, non-TWD currencies). */
+export function heldInstruments(): { symbols: string[]; coinIds: string[]; currencies: string[] } {
   const conn = db();
-  const cached = getPriceMap();
-  const stockTtl = isTwMarketOpen() ? TTL_MS.stockOpen : TTL_MS.stockClosed;
-
-  const symbols = (conn.prepare("SELECT DISTINCT symbol FROM stock_holdings").all() as { symbol: string }[])
-    .map((r) => r.symbol)
-    .filter((s) => force || isStale(cached.get(`tw:${s}`), stockTtl));
-  const hasFutures = !!conn.prepare("SELECT 1 FROM futures_accounts LIMIT 1").get();
+  const symbols = (conn.prepare("SELECT DISTINCT symbol FROM stock_holdings").all() as { symbol: string }[]).map((r) => r.symbol);
   const coinIds = new Set(
     (
       conn
@@ -168,32 +164,42 @@ async function doRefresh(force: boolean): Promise<RefreshResult> {
     ).map((r) => r.coin_id),
   );
   // USDT's TWD price converts futures equity into TWD.
-  if (hasFutures) coinIds.add(USDT_COIN_ID);
-  const coins = [...coinIds].filter(
+  if (conn.prepare("SELECT 1 FROM futures_accounts LIMIT 1").get()) coinIds.add(USDT_COIN_ID);
+  const currencies = (
+    conn.prepare("SELECT DISTINCT currency FROM cash_accounts WHERE currency != 'TWD'").all() as { currency: string }[]
+  ).map((r) => r.currency);
+  return { symbols, coinIds: [...coinIds], currencies };
+}
+
+async function doRefresh(force: boolean): Promise<RefreshResult> {
+  const cached = getPriceMap();
+  const stockTtl = isTwMarketOpen() ? TTL_MS.stockOpen : TTL_MS.stockClosed;
+  const held = heldInstruments();
+
+  const symbols = held.symbols.filter((s) => force || isStale(cached.get(`tw:${s}`), stockTtl));
+  const coins = held.coinIds.filter(
     (c) => force || isStale(cached.get(`crypto:${c}`), TTL_MS.crypto) || !cached.has(`crypto_usd:${c}`),
   );
-  const currencies = (conn.prepare("SELECT DISTINCT currency FROM cash_accounts").all() as { currency: string }[])
-    .map((r) => r.currency)
-    .filter((c) => c !== "TWD" && (force || isStale(cached.get(`fx:${c}`), TTL_MS.fx)));
+  const currencies = held.currencies.filter((c) => force || isStale(cached.get(`fx:${c}`), TTL_MS.fx));
 
-  const errors: string[] = [];
+  const errors = { tw: [] as string[], crypto: [] as string[], fx: [] as string[], sinopac: [] as string[] };
   const quotes: Quote[] = [];
 
   const tasks: Promise<void>[] = [
     ...symbols.map(async (s) => {
       const q = await fetchTwStock(s).catch((e) => {
-        errors.push(`台股 ${s}: ${(e as Error).message}`);
+        errors.tw.push(`台股 ${s}: ${(e as Error).message}`);
         return null;
       });
       if (q) quotes.push(q);
-      else if (!errors.some((m) => m.startsWith(`台股 ${s}`))) errors.push(`台股 ${s}: 查無報價`);
+      else if (!errors.tw.some((m) => m.startsWith(`台股 ${s}`))) errors.tw.push(`台股 ${s}: 查無報價`);
     }),
     fetchCrypto(coins)
       .then((qs) => void quotes.push(...qs))
-      .catch((e) => void errors.push(`加密貨幣: ${(e as Error).message}`)),
+      .catch((e) => void errors.crypto.push(`加密貨幣: ${(e as Error).message}`)),
     fetchFx(currencies)
       .then((qs) => void quotes.push(...qs))
-      .catch((e) => void errors.push(`匯率: ${(e as Error).message}`)),
+      .catch((e) => void errors.fx.push(`匯率: ${(e as Error).message}`)),
   ];
   // SinoPac futures equity rides along: it is stored on its own rows, not as a quote.
   let synced = 0;
@@ -201,15 +207,20 @@ async function doRefresh(force: boolean): Promise<RefreshResult> {
     tasks.push(
       syncSinopac().then((r) => {
         synced = r.synced;
-        if (r.error) errors.push(r.error);
+        if (r.error) errors.sinopac.push(r.error);
       }),
     );
   }
   await Promise.all(tasks);
 
   if (quotes.length) saveQuotes(quotes);
-  if (errors.length) console.warn("[prices] refresh errors:", errors);
-  return { updated: quotes.length + synced, errors };
+  // Per-feed outcome for /status and the monitor; feeds with nothing to fetch this round are left alone.
+  if (symbols.length) recordRun("feed:tw", errors.tw.join("；"));
+  if (coins.length) recordRun("feed:crypto", errors.crypto.join("；"));
+  if (currencies.length) recordRun("feed:fx", errors.fx.join("；"));
+  const all = [...errors.tw, ...errors.crypto, ...errors.fx, ...errors.sinopac];
+  if (all.length) console.warn("[prices] refresh errors:", all);
+  return { updated: quotes.length + synced, errors: all };
 }
 
 // ---------- lookups used when adding holdings ----------

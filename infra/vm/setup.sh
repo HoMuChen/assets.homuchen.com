@@ -37,6 +37,7 @@ install -d -m 0755 /etc/assets
 log "scripts and settings"
 install -m 0755 -o deploy -g deploy "$INFRA_DIR/deploy/deploy.sh" "$ASSETS_HOME/deploy.sh"
 install -m 0755 -o deploy -g deploy "$INFRA_DIR/backup/backup.sh" "$ASSETS_HOME/backup.sh"
+install -m 0755 -o deploy -g deploy "$INFRA_DIR/backup/restore-check.sh" "$ASSETS_HOME/restore-check.sh"
 for f in .env:env.production.example backup.env:backup.env.example sinopac.env:sinopac.env.example; do
   if [ ! -f "$ASSETS_HOME/${f%%:*}" ]; then
     install -m 0600 -o deploy -g deploy "$INFRA_DIR/vm/${f#*:}" "$ASSETS_HOME/${f%%:*}"
@@ -61,7 +62,7 @@ systemctl daemon-reload
 systemctl enable assets-deploy-receiver.service
 # enable --now does not restart a running service; restart so unit changes take effect
 systemctl restart assets-deploy-receiver.service
-# The deploy and backup timers are enabled after the first manual deploy (README)
+# The deploy, backup and restore-check timers are enabled after the first manual deploy (README)
 
 log "caddy site"
 install -m 0644 "$INFRA_DIR/caddy/assets.caddy" /etc/caddy/sites/assets.caddy
@@ -73,5 +74,5 @@ cat <<'EOF'
 Next (README "Production"):
   1. fill /opt/assets/.env, /opt/assets/backup.env and (for SinoPac sync) /opt/assets/sinopac.env
   2. sudo -u deploy /opt/assets/deploy.sh          # first deploy
-  3. systemctl enable --now assets-deploy.timer assets-backup.timer
+  3. systemctl enable --now assets-deploy.timer assets-backup.timer assets-restore-check.timer
 EOF

@@ -21,6 +21,8 @@
   --down: #4cb782;
   --danger: #eb5757;
   --warning: #f2c94c;
+  /* System health (/status), not price direction; always paired with a text label. */
+  --ok: #4cb782;
   /* Categorical series (validated for CVD separation on --panel). */
   --series-1: #3987e5;
   --series-2: #d95926;
@@ -49,6 +51,7 @@
     --down: #1e8a5a;
     --danger: #d03b3b;
     --warning: #b7791f;
+    --ok: #1e8a5a;
     --series-1: #2a78d6;
     --series-2: #eb6834;
     --series-3: #1baf7a;
@@ -75,6 +78,7 @@
   --color-down: var(--down);
   --color-danger: var(--danger);
   --color-warning: var(--warning);
+  --color-ok: var(--ok);
   --color-s1: var(--series-1);
   --color-s2: var(--series-2);
   --color-s3: var(--series-3);

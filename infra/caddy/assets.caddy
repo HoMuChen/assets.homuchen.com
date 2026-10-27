@@ -16,6 +16,11 @@ assets.homuchen.com {
 		reverse_proxy 127.0.0.1:9001
 	}
 
+	# Heartbeats come from the VM's own timers straight to 127.0.0.1:3100; never accept them from outside.
+	handle /api/heartbeat {
+		respond 404
+	}
+
 	handle {
 		reverse_proxy 127.0.0.1:3100 {
 			# The login lockout keys on CF-Connecting-IP / X-Real-IP first (src/lib/auth.ts). This host is not

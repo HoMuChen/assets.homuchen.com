@@ -164,6 +164,31 @@ const MIGRATIONS: ((conn: Database.Database) => void)[] = [
     conn.exec(BASELINE);
     addColumn(conn, "snapshots", "tw_futures", "REAL NOT NULL DEFAULT 0");
   },
+  // v2: monitoring (src/lib/jobs.ts, src/lib/alerts.ts). Times are ISO strings.
+  (conn) =>
+    conn.exec(`
+      -- Last outcome of each background job, quote feed, and heartbeat from the VM's timers.
+      CREATE TABLE job_runs (
+        name          TEXT PRIMARY KEY,
+        failing       INTEGER NOT NULL DEFAULT 0, -- 1 when the most recent run failed
+        last_run_at   TEXT NOT NULL,
+        last_ok_at    TEXT,
+        last_error_at TEXT,
+        last_error    TEXT
+      );
+
+      -- One row per alert condition; resolved_at IS NULL while it is active.
+      CREATE TABLE alerts (
+        key         TEXT PRIMARY KEY,
+        level       TEXT NOT NULL CHECK (level IN ('urgent', 'warning')),
+        title       TEXT NOT NULL,
+        detail      TEXT,
+        opened_at   TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        notified_at TEXT,
+        resolved_at TEXT
+      );
+    `),
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -303,4 +328,26 @@ export type SnapshotRow = {
   mortgage: number;
   detail: string;
   created_at: string;
+};
+
+export type JobRun = {
+  name: string;
+  failing: 0 | 1;
+  last_run_at: string;
+  last_ok_at: string | null;
+  last_error_at: string | null;
+  last_error: string | null;
+};
+
+export type AlertLevel = "urgent" | "warning";
+
+export type AlertRow = {
+  key: string;
+  level: AlertLevel;
+  title: string;
+  detail: string | null;
+  opened_at: string;
+  updated_at: string;
+  notified_at: string | null;
+  resolved_at: string | null;
 };

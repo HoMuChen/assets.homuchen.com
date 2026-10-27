@@ -1,4 +1,5 @@
 import { db, type TwFuturesAccount } from "./db";
+import { recordRun } from "./jobs";
 import { isTwFuturesOpen } from "./time";
 
 // How long a synced SinoPac reading counts as fresh before an opportunistic refresh re-fetches it.
@@ -8,7 +9,10 @@ const TTL_MS = { open: 5 * 60_000, closed: 60 * 60_000 };
  * failed sidecar call may re-login; SinoPac caps logins at 1,000/day. Forced refreshes ignore this.
  */
 const FAILURE_BACKOFF_MS = 5 * 60_000;
-const g = globalThis as unknown as { __sinopacFailedAt?: number };
+const g = globalThis as unknown as {
+  __sinopacFailedAt?: number;
+  __sinopacSync?: Promise<{ synced: number; error: string | null }> | null;
+};
 
 type SidecarAccount = {
   account_id: string;
@@ -33,8 +37,13 @@ function sinopacRows(): TwFuturesAccount[] {
   return db().prepare("SELECT * FROM tw_futures_accounts WHERE source = 'sinopac' ORDER BY id").all() as TwFuturesAccount[];
 }
 
+/** A sync failed recently; wait out FAILURE_BACKOFF_MS before trying again (unless forced). */
+export function sinopacBackingOff(): boolean {
+  return !!g.__sinopacFailedAt && Date.now() - g.__sinopacFailedAt < FAILURE_BACKOFF_MS;
+}
+
 export function sinopacStale(): boolean {
-  if (g.__sinopacFailedAt && Date.now() - g.__sinopacFailedAt < FAILURE_BACKOFF_MS) return false;
+  if (sinopacBackingOff()) return false;
   const ttl = isTwFuturesOpen() ? TTL_MS.open : TTL_MS.closed;
   return sinopacRows().some((r) => !r.synced_at || Date.now() - new Date(r.synced_at).getTime() > ttl);
 }
@@ -44,10 +53,25 @@ export function sinopacStale(): boolean {
  * futures account not already claimed. Failures are recorded on the rows (sync_error) and the last good
  * equity is kept, so a sidecar outage never zeroes net worth.
  */
-export async function syncSinopac(): Promise<{ synced: number; error: string | null }> {
+export function syncSinopac(): Promise<{ synced: number; error: string | null }> {
+  // Pages, the quote cycle and the scheduler's margin watch can all ask at once; share one sidecar call.
+  if (!g.__sinopacSync) {
+    g.__sinopacSync = doSync()
+      .then((r) => {
+        if (r.attempted) recordRun("sync:sinopac", r.error);
+        return { synced: r.synced, error: r.error };
+      })
+      .finally(() => {
+        g.__sinopacSync = null;
+      });
+  }
+  return g.__sinopacSync;
+}
+
+async function doSync(): Promise<{ attempted: boolean; synced: number; error: string | null }> {
   const rows = sinopacRows();
   const url = sidecarUrl();
-  if (rows.length === 0 || !url) return { synced: 0, error: null };
+  if (rows.length === 0 || !url) return { attempted: false, synced: 0, error: null };
 
   const setError = db().prepare("UPDATE tw_futures_accounts SET sync_error = ? WHERE id = ?");
   let accounts: SidecarAccount[];
@@ -60,7 +84,7 @@ export async function syncSinopac(): Promise<{ synced: number; error: string | n
     const msg = `永豐 API：${(e as Error).message}`;
     rows.forEach((r) => setError.run(msg, r.id));
     g.__sinopacFailedAt = Date.now();
-    return { synced: 0, error: msg };
+    return { attempted: true, synced: 0, error: msg };
   }
 
   const update = db().prepare(
@@ -101,5 +125,5 @@ export async function syncSinopac(): Promise<{ synced: number; error: string | n
     }
   })();
   g.__sinopacFailedAt = errors.length ? Date.now() : undefined;
-  return { synced, error: errors.length ? errors.join("；") : null };
+  return { attempted: true, synced, error: errors.length ? errors.join("；") : null };
 }

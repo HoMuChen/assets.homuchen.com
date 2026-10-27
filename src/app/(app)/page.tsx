@@ -2,6 +2,7 @@ import Link from "next/link";
 import { NetWorthChart } from "@/components/charts";
 import { RefreshBar } from "@/components/refresh-bar";
 import { Badge, Card, CardHeader, CategoryDot, Delta, PageHeader, Stat, td, th, tr } from "@/components/ui";
+import { activeAlerts } from "@/lib/alerts";
 import { CATEGORY_COLOR, CATEGORY_HREF, CATEGORY_ORDER } from "@/lib/categories";
 import { fmtPct, fmtTwd } from "@/lib/format";
 import { CATEGORY_LABEL, getPortfolio, type Category } from "@/lib/portfolio";
@@ -12,6 +13,7 @@ import { toTrend } from "@/lib/trend";
 export default function OverviewPage() {
   const p = getPortfolio();
   const t = p.totals;
+  const alerts = activeAlerts();
   const snapshots = getSnapshots();
   const today = taipeiDate();
   const prev = [...snapshots].reverse().find((s) => s.date < today);
@@ -78,6 +80,21 @@ export default function OverviewPage() {
             </div>
           )}
         </div>
+
+        {alerts.length > 0 && (
+          <Link
+            href="/status"
+            className={`flex items-center gap-2 rounded-lg border px-4 py-2.5 text-[13px] transition-colors hover:bg-hover ${
+              alerts[0].level === "urgent" ? "border-danger/40 text-danger" : "border-warning/30 text-warning"
+            }`}
+          >
+            <span>{alerts[0].level === "urgent" ? "🚨" : "⚠"}</span>
+            <span className="min-w-0 flex-1 truncate">
+              {alerts.map((a) => a.title).join("、")}
+            </span>
+            <span className="shrink-0 text-[12px] text-fg-3">系統狀態 →</span>
+          </Link>
+        )}
 
         {isEmpty && (
           <Card className="px-5 py-6 text-[13px] text-fg-2">

@@ -6,6 +6,8 @@
 # container never sees the R2 keys:
 #   S3_ENDPOINT, S3_REGION, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, BACKUP_S3_BUCKET
 #   BACKUP_PING_URL   optional healthchecks.io URL (start / success / fail)
+#   HEARTBEAT_TOKEN   same value as in the app's .env; the outcome is reported to the app (/api/heartbeat),
+#                     which alerts on Telegram when a backup fails or doesn't run
 #
 # Retention: the newest 14 backups, plus the newest of each of the last 12 months.
 set -euo pipefail
@@ -31,25 +33,41 @@ s3() {
 ping() {
   if [ -n "${BACKUP_PING_URL:-}" ]; then curl -fsS -m 10 --retry 3 "$BACKUP_PING_URL$1" >/dev/null || true; fi
 }
+# heartbeat <json>: best effort, a down app must not fail the backup
+heartbeat() {
+  if [ -n "${HEARTBEAT_TOKEN:-}" ]; then
+    curl -fsS -m 10 --retry 3 -H "authorization: Bearer $HEARTBEAT_TOKEN" -H "content-type: application/json" \
+      --data "$1" "${HEARTBEAT_URL:-http://127.0.0.1:3100/api/heartbeat}" >/dev/null || log "heartbeat not delivered"
+  fi
+}
+# Set before each step that can fail, so the heartbeat says which one did
+STEP=start
 
 TMP=$(mktemp -d)
 finish() {
   local status=$?
   rm -rf "$TMP"
-  if [ "$status" -eq 0 ]; then ping ""; else
-    log "backup failed (exit $status)"
+  if [ "$status" -eq 0 ]; then
+    ping ""
+    heartbeat '{"job":"backup","ok":true}'
+  else
+    log "backup failed at $STEP (exit $status)"
     ping /fail
+    heartbeat "{\"job\":\"backup\",\"ok\":false,\"message\":\"$STEP failed (exit $status)\"}"
   fi
 }
 trap finish EXIT
 ping /start
 
+STEP=locate
 [ -f "$DB" ] || {
   log "$DB not found"
   exit 1
 }
 # .backup takes a consistent copy while the app keeps writing (WAL mode)
+STEP=snapshot
 sqlite3 "$DB" ".backup '$TMP/assets.db'"
+STEP=integrity_check
 check=$(sqlite3 "$TMP/assets.db" "PRAGMA integrity_check")
 [ "$check" = ok ] || {
   log "integrity_check: $check"
@@ -57,11 +75,13 @@ check=$(sqlite3 "$TMP/assets.db" "PRAGMA integrity_check")
 }
 gzip -9 "$TMP/assets.db"
 
+STEP=upload
 KEY=${PREFIX}assets-$(date -u +%Y%m%dT%H%M%SZ).db.gz
 s3 -T "$TMP/assets.db.gz" "$BUCKET_URL/$KEY" -o /dev/null
 log "uploaded $KEY ($(stat -c %s "$TMP/assets.db.gz") bytes)"
 
 # Keys sort chronologically; only names this script writes are considered for deletion
+STEP=prune
 mapfile -t keys < <(s3 "$BUCKET_URL?list-type=2&prefix=$PREFIX" | grep -o '<Key>[^<]*</Key>' |
   sed 's/<[^>]*>//g' | grep -E "^${PREFIX}assets-[0-9]{8}T[0-9]{6}Z\.db\.gz$" | sort -r)
 declare -A keep=() months=()

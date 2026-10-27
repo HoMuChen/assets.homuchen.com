@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly assets backup restore check
+
+[Timer]
+# Sunday morning, an hour after that day's 03:30 backup
+OnCalendar=Sun *-*-* 04:30:00 Asia/Taipei
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

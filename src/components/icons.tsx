@@ -33,6 +33,9 @@ export const IconHouse = (p: SVGProps<SVGSVGElement>) => (
 export const IconHistory = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base(p)}><path d="M2.5 8a5.5 5.5 0 105.5-5.5A5.5 5.5 0 004 4.3" /><path d="M2.5 2v2.5H5" /><path d="M8 5v3l2 1.5" /></svg>
 );
+export const IconPulse = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}><path d="M1.5 8.5h3l1.75-4.5 3.25 8 1.75-3.5h3.25" /></svg>
+);
 export const IconRefresh = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base(p)}><path d="M13 8a5 5 0 11-1.46-3.54" /><path d="M13 2.5v3h-3" /></svg>
 );

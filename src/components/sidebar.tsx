@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { logout, logoutAll } from "@/lib/actions";
-import { IconCash, IconCrypto, IconFutures, IconHistory, IconHouse, IconLogout, IconOverview, IconStock } from "./icons";
+import { IconCash, IconCrypto, IconFutures, IconHistory, IconHouse, IconLogout, IconOverview, IconPulse, IconStock } from "./icons";
 import { Logo } from "./logo";
 
 const NAV = [
@@ -16,7 +16,7 @@ const NAV = [
   { href: "/history", label: "歷史快照", icon: IconHistory },
 ];
 
-export function Sidebar({ authEnabled }: { authEnabled: boolean }) {
+export function Sidebar({ authEnabled, alertCount }: { authEnabled: boolean; alertCount: number }) {
   const pathname = usePathname();
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
 
@@ -42,27 +42,43 @@ export function Sidebar({ authEnabled }: { authEnabled: boolean }) {
             </Link>
           ))}
         </nav>
-        {authEnabled && (
-          <div className="mt-auto flex flex-col gap-px px-2 pb-3">
-            <form action={logout}>
-              <button className="flex h-7 w-full items-center gap-2.5 rounded-md px-2 text-[13px] text-fg-4 hover:bg-hover hover:text-fg-2">
-                <IconLogout />
-                登出
-              </button>
-            </form>
-            <form
-              action={logoutAll}
-              onSubmit={(e) => {
-                if (!confirm("確定要登出所有裝置（包含這台）嗎？")) e.preventDefault();
-              }}
-            >
-              <button className="flex h-7 w-full items-center gap-2.5 rounded-md px-2 text-[12px] text-fg-4 hover:bg-hover hover:text-fg-2">
-                <span className="w-4" />
-                登出所有裝置
-              </button>
-            </form>
-          </div>
-        )}
+        <div className="mt-auto flex flex-col gap-px px-2 pb-3">
+          <Link
+            href="/status"
+            className={`flex h-7 items-center gap-2.5 rounded-md px-2 text-[13px] transition-colors ${
+              isActive("/status") ? "bg-hover text-fg" : "text-fg-3 hover:bg-hover hover:text-fg-2"
+            }`}
+          >
+            <IconPulse className={isActive("/status") ? "text-fg-2" : "text-fg-4"} />
+            系統狀態
+            {alertCount > 0 && (
+              <span className="num ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] text-white">
+                {alertCount}
+              </span>
+            )}
+          </Link>
+          {authEnabled && (
+            <>
+              <form action={logout}>
+                <button className="flex h-7 w-full items-center gap-2.5 rounded-md px-2 text-[13px] text-fg-4 hover:bg-hover hover:text-fg-2">
+                  <IconLogout />
+                  登出
+                </button>
+              </form>
+              <form
+                action={logoutAll}
+                onSubmit={(e) => {
+                  if (!confirm("確定要登出所有裝置（包含這台）嗎？")) e.preventDefault();
+                }}
+              >
+                <button className="flex h-7 w-full items-center gap-2.5 rounded-md px-2 text-[12px] text-fg-4 hover:bg-hover hover:text-fg-2">
+                  <span className="w-4" />
+                  登出所有裝置
+                </button>
+              </form>
+            </>
+          )}
+        </div>
       </aside>
 
       {/* Mobile bottom nav */}

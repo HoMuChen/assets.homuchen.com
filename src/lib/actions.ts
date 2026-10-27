@@ -17,8 +17,10 @@ import {
   verifyPassword,
 } from "./session";
 import { db } from "./db";
+import { tracked } from "./jobs";
 import { lookupTwStockName, refreshPrices, resolveCoin } from "./prices";
 import { takeSnapshot } from "./snapshot";
+import { sendTelegram, telegramConfigured } from "./telegram";
 import { sinopacConfigured, syncSinopac } from "./tw-futures";
 
 export type ActionState = { ok: boolean; error?: string } | null;
@@ -394,8 +396,19 @@ export async function refreshNow(): Promise<ActionState> {
 
 export async function snapshotNow(): Promise<ActionState> {
   return guarded(async () => {
-    await takeSnapshot();
+    // Tracked like the scheduled one, so a manual retry clears a "snapshot failed" alert.
+    await tracked("snapshot", takeSnapshot);
     return done();
+  });
+}
+
+// ---------- notifications ----------
+
+export async function sendTestNotification(): Promise<ActionState> {
+  return guarded(async () => {
+    if (!telegramConfigured()) return { ok: false, error: "尚未設定 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID" };
+    const sent = await sendTelegram("✅ Assets 測試訊息：告警會送到這裡。");
+    return sent ? { ok: true } : { ok: false, error: "傳送失敗，請看伺服器 log" };
   });
 }
 
