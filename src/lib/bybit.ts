@@ -1,11 +1,11 @@
 // Read-only Bybit (V5) sync for one Unified Trading Account. Create the key read-only and bound to the VM's IP;
 // set BYBIT_API_KEY / BYBIT_API_SECRET. The futures account whose source is 'bybit' holds all of the account's
-// USDT (Unified + Funding) and its USDT-margined positions; every other coin is spot, held in the crypto account
-// whose source is 'bybit'.
+// margin stablecoins (MARGIN_COINS, Unified + Funding, counted 1:1 as USDT) and its USDT-margined positions; every
+// other coin is spot, held in the crypto account whose source is 'bybit'.
 //
 //  - balances (every minute): wallet, positions, mark and liquidation prices, margin rate (src/lib/monitor.ts
 //    watches them);
-//  - records (every 10 minutes): the USDT wallet's transaction log, deposits and withdrawals into the futures
+//  - records (every 10 minutes): the margin coins' transaction log, deposits and withdrawals into the futures
 //    account's ledger; spot fills into the crypto account; coin deposits and withdrawals into the inbox to be
 //    confirmed; then each holding is checked against the balances (src/lib/inbox.ts).
 //
@@ -29,6 +29,13 @@ const DAY = 86_400_000;
 const OVERLAP_MS = 60 * 60_000;
 /** Bybit keeps fills and the transaction log for two years. */
 const HISTORY_MS = 729 * DAY;
+
+/**
+ * The futures wallet: Bybit takes both as margin for USDT perpetuals. USDC is counted 1:1 as USDT, so the
+ * ledger adds up in units; the two rarely drift more than 0.1% apart.
+ */
+export const MARGIN_COINS = ["USDT", "USDC"];
+const isMargin = (coin: string) => MARGIN_COINS.includes(coin.toUpperCase());
 
 export const bybitConfigured = () => !!process.env.BYBIT_API_KEY && !!process.env.BYBIT_API_SECRET;
 
@@ -192,8 +199,10 @@ async function spotPair(symbol: string): Promise<{ base: string; quote: string }
 export type Balances = {
   /** Units per coin, Unified + Funding, net of borrowing. */
   coins: Map<string, number>;
-  usdtUnified: number;
-  usdtFund: number;
+  /** Margin coins, Unified + Funding; the futures wallet. */
+  margin: number;
+  /** The part of `margin` in the Funding account. */
+  marginFund: number;
   /** Maintenance margin ÷ margin balance, %; Bybit liquidates at 100. */
   marginRate: number | null;
   positions: LinearPosition[];
@@ -209,14 +218,15 @@ async function fetchBalances(): Promise<Balances> {
   const add = (coin: string, n: number) => {
     if (n) coins.set(coin.toUpperCase(), (coins.get(coin.toUpperCase()) ?? 0) + n);
   };
+  const margin = () => MARGIN_COINS.reduce((sum, c) => sum + (coins.get(c) ?? 0), 0);
   const unified = wallet.list[0];
   for (const c of unified?.coin ?? []) add(c.coin, num(c.walletBalance) - num(c.spotBorrow));
-  const usdtUnified = coins.get("USDT") ?? 0;
+  const marginUnified = margin();
   for (const c of fund.balance ?? []) add(c.coin, num(c.walletBalance));
   return {
     coins,
-    usdtUnified,
-    usdtFund: (coins.get("USDT") ?? 0) - usdtUnified,
+    margin: margin(),
+    marginFund: margin() - marginUnified,
     marginRate: unified?.accountMMRate ? num(unified.accountMMRate) * 100 : null,
     positions: positions.filter((p) => num(p.size) > 0),
   };
@@ -249,7 +259,7 @@ async function applyBalances(fa: FuturesAccount, b: Balances, memo: Map<string, 
         `UPDATE futures_accounts SET wallet_balance = ?, fund_balance = ?, margin_rate = ?, synced_at = ?, sync_error = NULL,
          updated_at = datetime('now') WHERE id = ?`,
       )
-      .run(b.usdtUnified + b.usdtFund, b.usdtFund, b.marginRate, now.toISOString(), fa.id);
+      .run(b.margin, b.marginFund, b.marginRate, now.toISOString(), fa.id);
     db().prepare("DELETE FROM futures_positions WHERE account_id = ?").run(fa.id);
     const insert = db().prepare(
       `INSERT INTO futures_positions (account_id, coin_id, symbol, name, side, quantity, entry_price, leverage, note, mark_price, liq_price, upnl)
@@ -276,8 +286,10 @@ const since = (c: Cursor, now: number) => Math.max(c.start, c.done - OVERLAP_MS,
 
 async function fetchLog(c: Cursor, now: number): Promise<LogEntry[]> {
   const out: LogEntry[] = [];
-  for (const [a, b] of spans(since(c, now), now, 7 * DAY)) {
-    out.push(...(await pages<LogEntry>("/v5/account/transaction-log", { accountType: "UNIFIED", currency: "USDT", startTime: a, endTime: b, limit: 50 })));
+  for (const currency of MARGIN_COINS) {
+    for (const [a, b] of spans(since(c, now), now, 7 * DAY)) {
+      out.push(...(await pages<LogEntry>("/v5/account/transaction-log", { accountType: "UNIFIED", currency, startTime: a, endTime: b, limit: 50 })));
+    }
   }
   return out.filter((e) => ms(e.transactionTime) >= c.start);
 }
@@ -331,7 +343,7 @@ async function fetchFlows(now: number): Promise<Flow[]> {
 
 const dateOf = (t: number) => taipeiDate(new Date(t));
 
-/** One entry of the USDT wallet's transaction log as a ledger transaction; null for what isn't a balance change. */
+/** One entry of a margin coin's transaction log as a ledger transaction; null for what isn't a balance change. */
 export function logEntryTx(e: LogEntry, accountId: number): TxInput | null {
   const amount = num(e.change);
   if (!amount) return null;
@@ -384,7 +396,7 @@ export function logEntryTx(e: LogEntry, accountId: number): TxInput | null {
 /**
  * A spot fill as ledger transactions in TWD. The base coin is bought or sold at the fill price times the quote
  * coin's TWD price; a fee taken in the base coin comes out of the units. The quote coin's own leg is included
- * unless `quoteElsewhere` (USDT, which the futures wallet's log already records).
+ * unless `quoteElsewhere` (a margin coin, which the futures wallet's log already records).
  */
 export function fillLegs(
   f: Fill,
@@ -443,7 +455,7 @@ function applySynced(t: TxInput, title: string, now: Date) {
   }
 }
 
-/** The futures account's ledger account, opened at today's USDT balance the first time it syncs. */
+/** The futures account's ledger account, opened at today's margin balance the first time it syncs. */
 function futuresLedger(fa: FuturesAccount, b: Balances, now: Date): { account: Account; cursor: Cursor } | null {
   const existing = fa.account_id ? getAccount(fa.account_id) : undefined;
   if (existing) return { account: existing, cursor: readCursor(`futures:${existing.id}`) ?? { start: now.getTime(), done: now.getTime() } };
@@ -454,7 +466,7 @@ function futuresLedger(fa: FuturesAccount, b: Balances, now: Date): { account: A
       .run(fa.name, at, at);
     const id = Number(r.lastInsertRowid);
     addTransaction(
-      { accountId: id, date: taipeiDate(now), type: "open", asset: null, quantity: 0, price: null, amount: b.usdtUnified + b.usdtFund, fee: 0, tax: 0, note: "開始同步時的 USDT 餘額" },
+      { accountId: id, date: taipeiDate(now), type: "open", asset: null, quantity: 0, price: null, amount: b.margin, fee: 0, tax: 0, note: "開始同步時的保證金餘額（USDT＋USDC）" },
       now,
     );
     db().prepare("UPDATE futures_accounts SET account_id = ? WHERE id = ?").run(id, fa.id);
@@ -519,7 +531,7 @@ export async function runSync(mode: SyncMode, now = new Date()): Promise<SyncRes
             const tx = logEntryTx(e, account.id);
             if (tx) addTransaction(tx, now);
           }
-          for (const f of flows.filter((x) => x.coin === "USDT" && x.time >= cursor.start)) {
+          for (const f of flows.filter((x) => isMargin(x.coin) && x.time >= cursor.start)) {
             addTransaction(
               { accountId: account.id, date: dateOf(f.time), type: f.quantity > 0 ? "deposit" : "withdraw", asset: null, quantity: 0, price: null, amount: f.quantity, fee: f.networkFee, tax: 0, note: f.detail, source: "bybit", externalId: f.key },
               now,
@@ -527,7 +539,7 @@ export async function runSync(mode: SyncMode, now = new Date()): Promise<SyncRes
           }
         })();
         writeCursor(`futures:${account.id}`, { ...cursor, done: t }, now);
-        reportHolding({ accountId: account.id, asset: null, source: "bybit", date: taipeiDate(now), observed: b.usdtUnified + b.usdtFund }, now);
+        reportHolding({ accountId: account.id, asset: null, source: "bybit", date: taipeiDate(now), observed: b.margin }, now);
       }
     }
     if (mode === "full" && spot && spotCursor) await syncSpot(spot, spotCursor, b, fills, flows, !!fa, memo, now);
@@ -551,8 +563,8 @@ async function syncSpot(
   memo: Map<string, string>,
   now: Date,
 ) {
-  // All of the account's USDT is the futures wallet when one is linked.
-  const isSpot = (coin: string) => coin !== "USDT" || !futuresLinked;
+  // The margin coins are the futures wallet when one is linked.
+  const isSpot = (coin: string) => !futuresLinked || !isMargin(coin);
   const pairs = new Map<string, { base: string; quote: string }>();
   for (const f of fills) if (!pairs.has(f.symbol)) pairs.set(f.symbol, await spotPair(f.symbol));
   const coins = new Set([...pairs.values()].flatMap((p) => [p.base, p.quote]));

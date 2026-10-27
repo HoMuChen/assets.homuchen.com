@@ -143,21 +143,21 @@ function bybitApi(api: Api, fail?: { status?: number; retCode?: number; retMsg?:
   vi.stubEnv("BYBIT_API_SECRET", "secret");
   const headers: Record<string, string>[] = [];
   const ok = (result: unknown) => Response.json({ retCode: 0, retMsg: "OK", result });
-  const route = (path: string, body: () => unknown) =>
+  const route = (path: string, body: (url: URL) => unknown) =>
     [
       path,
-      (_: URL, init?: RequestInit) => {
+      (url: URL, init?: RequestInit) => {
         headers.push({ ...(init?.headers as Record<string, string>) });
         if (fail?.status) return new Response("Forbidden", { status: fail.status });
         if (fail?.retCode) return Response.json({ retCode: fail.retCode, retMsg: fail.retMsg ?? "error", result: {} });
-        return ok(body());
+        return ok(body(url));
       },
     ] as const;
   const calls = mockFetch([
     route("/v5/account/wallet-balance", () => ({ list: [{ accountMMRate: api.mmr, coin: api.unified }] })),
     route("/v5/asset/transfer/query-account-coins-balance", () => ({ balance: api.fund })),
     route("/v5/position/list", () => ({ list: api.positions, nextPageCursor: "" })),
-    route("/v5/account/transaction-log", () => ({ list: api.log, nextPageCursor: "" })),
+    route("/v5/account/transaction-log", (url) => ({ list: api.log.filter((e) => e.currency === url.searchParams.get("currency")), nextPageCursor: "" })),
     route("/v5/execution/list", () => ({ list: api.fills, nextPageCursor: "" })),
     route("/v5/asset/deposit/query-record", () => ({ rows: api.deposits, nextPageCursor: "" })),
     route("/v5/asset/deposit/query-internal-record", () => ({ rows: api.internal, nextPageCursor: "" })),
@@ -274,6 +274,37 @@ describe("runSync", () => {
     api.unified = [{ coin: "USDT", walletBalance: "1300" }]; // e.g. bought with P2P
     await runSync("full", T1);
     expect(openItems(T2)).toMatchObject([{ kind: "diff", amount: 300, title: "餘額：Bybit 1,300 USDT，帳本 1,000" }]);
+  });
+
+  it("counts USDC as margin: in the wallet, its log and its deposits, never as spot", async () => {
+    linkFutures();
+    const spot = linkSpot();
+    const api = emptyApi();
+    api.unified = [
+      { coin: "USDT", walletBalance: "800" },
+      { coin: "USDC", walletBalance: "2500" },
+      { coin: "BTC", walletBalance: "0.5" },
+    ];
+    api.fund = [{ coin: "USDC", walletBalance: "100" }];
+    bybitApi(api);
+    await runSync("full", T0);
+    expect(futuresAccount()).toMatchObject({ wallet_balance: 3400, fund_balance: 100 });
+    const ledger = futuresLedger()!;
+    expect(txs(ledger.id)).toMatchObject([{ type: "open", amount: 3400, note: "開始同步時的保證金餘額（USDT＋USDC）" }]);
+
+    api.log = [log({ id: "u1", currency: "USDC", symbol: "BTCPERP", cashFlow: "20", change: "20" })];
+    api.deposits = [{ id: "d3", txID: "0x3", coin: "USDC", chain: "ETH", amount: "50", status: 3, successAt: inMin(T0, 2) }];
+    api.unified[1] = { coin: "USDC", walletBalance: "2570" };
+    await runSync("full", T1);
+    expect(txs(ledger.id).map((t) => [t.type, t.amount])).toEqual([
+      ["open", 3400],
+      ["pnl", 20],
+      ["deposit", 50],
+    ]);
+    expect(futuresAccount().wallet_balance).toBe(3470);
+    // Nothing to confirm: the wallet adds up, and USDC is no spot holding.
+    expect(inbox()).toEqual([]);
+    expect(seriesAt(spot, "crypto:usd-coin", "2026-10-27").quantity).toBe(0);
   });
 
   it("applies spot fills, queues coin deposits to confirm, and checks every coin against the ledger", async () => {
