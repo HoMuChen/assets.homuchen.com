@@ -1,11 +1,12 @@
 import crypto from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { at, holding, insert, mockFetch, resetDb, setPrice } from "@/test/helpers";
-import { bybitStatus, fillLegs, linearBase, logEntryTx, runSync, sign, syncBybit, type Fill, type LogEntry } from "./bybit";
+import { bybitStatus, fillLegs, fillNote, linearBase, logEntryTx, runSync, sign, syncBybit, type Fill, type LogEntry } from "./bybit";
 import { db, type Account, type FuturesAccount, type FuturesPosition, type InboxItem, type Transaction } from "./db";
 import { acceptItem, openItems } from "./inbox";
 import { getRuns } from "./jobs";
 import { saveInstrument, seriesAt } from "./ledger";
+import { addTransaction } from "./transactions";
 
 beforeEach(resetDb);
 
@@ -25,6 +26,9 @@ const log = (fields: Partial<LogEntry>): LogEntry => ({
   cashFlow: "0",
   fee: "0",
   change: "0",
+  qty: "",
+  size: "",
+  tradePrice: "",
   ...fields,
 });
 
@@ -63,19 +67,39 @@ describe("linearBase", () => {
 describe("logEntryTx", () => {
   it("turns the USDT wallet's log into ledger entries, by what each one is", () => {
     const as = (e: Partial<LogEntry>) => logEntryTx(log(e), 7);
-    expect(as({ cashFlow: "-50", fee: "1.5", change: "-51.5" })).toMatchObject({
+    // Closing a long: the amount is the PnL net of the fee.
+    expect(as({ cashFlow: "-50", fee: "1.5", change: "-51.5", qty: "0.05", size: "0", tradePrice: "75000" })).toMatchObject({
       accountId: 7,
       date: "2026-10-27",
-      type: "pnl",
+      type: "trade",
+      asset: null,
+      contract: "BTCUSDT",
+      quantity: -0.05,
+      price: 75000,
       amount: -51.5,
       fee: 1.5,
-      note: "BTCUSDT 賣",
+      note: "平多，損益 -50.00",
       source: "bybit",
     });
-    expect(as({ fee: "2", change: "-2", side: "Buy" })).toMatchObject({ type: "fee", amount: -2, note: "BTCUSDT 買" });
+    // Adding to a long: the fee alone.
+    expect(as({ fee: "0.76", change: "-0.76", side: "Buy", qty: "0.05", size: "0.12", tradePrice: "76000" })).toMatchObject({
+      type: "trade",
+      contract: "BTCUSDT",
+      quantity: 0.05,
+      price: 76000,
+      amount: -0.76,
+      fee: 0.76,
+      note: "加多 → 多單 0.12",
+    });
     expect(as({ category: "spot", change: "-6000" })).toMatchObject({ type: "transfer", note: "現貨 BTCUSDT 賣" });
-    expect(as({ type: "SETTLEMENT", change: "-0.8" })).toMatchObject({ type: "funding", fee: 0, note: "BTCUSDT" });
-    expect(as({ type: "LIQUIDATION", change: "-300" })).toMatchObject({ type: "pnl", note: "BTCUSDT LIQUIDATION" });
+    expect(as({ type: "SETTLEMENT", change: "-0.8", size: "0.12" })).toMatchObject({ type: "funding", fee: 0, contract: "BTCUSDT", quantity: 0, note: "多單 0.12" });
+    expect(as({ type: "SETTLEMENT", change: "0.3", size: "-0.4" })).toMatchObject({ note: "空單 0.4" });
+    expect(as({ type: "LIQUIDATION", change: "-300", qty: "0.1", size: "0", tradePrice: "50000", cashFlow: "-300" })).toMatchObject({
+      type: "pnl",
+      contract: "BTCUSDT",
+      quantity: -0.1,
+      note: "強制平倉，平多，損益 -300.00",
+    });
     expect(as({ type: "INTEREST", change: "-0.1" })).toMatchObject({ type: "fee", note: "借款利息" });
     expect(as({ type: "FEE_REFUND", change: "0.3" })).toMatchObject({ type: "fee", amount: 0.3 });
     expect(as({ type: "CONVERT", change: "10" })).toMatchObject({ type: "transfer" });
@@ -92,6 +116,33 @@ describe("logEntryTx", () => {
     const a = logEntryTx(log({ cashFlow: "-50", change: "-50" }), 7)!;
     const b = logEntryTx(log({ type: "SETTLEMENT", change: "-1" }), 7)!;
     expect(a.externalId).not.toBe(b.externalId);
+  });
+});
+
+describe("fillNote", () => {
+  const note = (side: "Buy" | "Sell", qty: string, size: string, cashFlow = "0") => fillNote(log({ side, qty, size, cashFlow }));
+
+  it("tells what a fill did to the position and what is left", () => {
+    expect(note("Buy", "0.05", "0.05")).toBe("開多 → 多單 0.05");
+    expect(note("Buy", "0.05", "0.12")).toBe("加多 → 多單 0.12");
+    expect(note("Sell", "0.05", "0.07", "12.3")).toBe("減多 → 多單 0.07，損益 +12.30");
+    expect(note("Sell", "0.07", "0", "-4")).toBe("平多，損益 -4.00");
+    expect(note("Sell", "0.03", "-0.03")).toBe("開空 → 空單 0.03");
+    expect(note("Sell", "0.02", "-0.05")).toBe("加空 → 空單 0.05");
+    expect(note("Buy", "0.02", "-0.03", "1")).toBe("減空 → 空單 0.03，損益 +1.00");
+    expect(note("Buy", "0.03", "0", "2")).toBe("平空，損益 +2.00");
+    expect(note("Sell", "0.1", "-0.03", "5")).toBe("反手做空 → 空單 0.03，損益 +5.00");
+    expect(note("Buy", "0.1", "0.04", "-5")).toBe("反手做多 → 多單 0.04，損益 -5.00");
+  });
+
+  it("copes with float dust in the sizes", () => {
+    expect(note("Buy", "0.3", "0.30000000000000004")).toBe("開多 → 多單 0.30000000000000004");
+    expect(note("Sell", "0.1", "0.20000000000000001")).toBe("減多 → 多單 0.2");
+  });
+
+  it("falls back to the side without a position size", () => {
+    expect(note("Buy", "0.05", "")).toBe("買");
+    expect(note("Sell", "", "0.1")).toBe("賣");
   });
 });
 
@@ -252,7 +303,7 @@ describe("runSync", () => {
     await runSync("full", T1);
     expect(txs(ledger.id).map((t) => [t.type, t.amount])).toEqual([
       ["open", 1200],
-      ["pnl", -51],
+      ["trade", -51],
       ["funding", -2],
       ["deposit", 100],
       ["withdraw", -41],
@@ -274,6 +325,28 @@ describe("runSync", () => {
     api.unified = [{ coin: "USDT", walletBalance: "1300" }]; // e.g. bought with P2P
     await runSync("full", T1);
     expect(openItems(T2)).toMatchObject([{ kind: "diff", amount: 300, title: "餘額：Bybit 1,300 USDT，帳本 1,000" }]);
+  });
+
+  it("describes again a fill it recorded before fills carried their size and price, moving no balance", async () => {
+    linkFutures();
+    const api = emptyApi();
+    api.unified = [{ coin: "USDT", walletBalance: "1000" }];
+    bybitApi(api);
+    await runSync("full", T0);
+    const ledger = futuresLedger()!;
+    const entry = log({ id: "f1", side: "Buy", fee: "0.76", change: "-0.76", qty: "0.05", size: "0.12", tradePrice: "76000" });
+    // As an earlier build wrote it.
+    addTransaction({ ...logEntryTx(entry, ledger.id)!, type: "fee", contract: null, quantity: 0, price: null, note: "BTCUSDT 買" }, T0);
+
+    api.log = [entry];
+    api.unified = [{ coin: "USDT", walletBalance: "999.24" }];
+    await runSync("full", T1);
+    expect(txs(ledger.id)).toMatchObject([
+      { type: "open", amount: 1000 },
+      { type: "trade", contract: "BTCUSDT", quantity: 0.05, price: 76000, amount: -0.76, fee: 0.76, note: "加多 → 多單 0.12" },
+    ]);
+    expect(seriesAt(ledger.id, null, "2026-10-27").quantity).toBeCloseTo(999.24, 9);
+    expect(inbox()).toEqual([]);
   });
 
   it("counts USDC as margin: in the wallet, its log and its deposits, never as spot", async () => {
@@ -298,7 +371,7 @@ describe("runSync", () => {
     await runSync("full", T1);
     expect(txs(ledger.id).map((t) => [t.type, t.amount])).toEqual([
       ["open", 3400],
-      ["pnl", 20],
+      ["trade", 20],
       ["deposit", 50],
     ]);
     expect(futuresAccount().wallet_balance).toBe(3470);

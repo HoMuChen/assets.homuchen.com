@@ -21,6 +21,8 @@ export type TxInput = {
   note: string | null;
   source?: string;
   externalId?: string | null;
+  /** A futures wallet's contract, e.g. 'BTCUSDT'; quantity and price are then the fill's. */
+  contract?: string | null;
 };
 
 const assetLabel = (asset: string | null) => (asset ? (instruments().get(asset)?.symbol ?? asset) : "餘額");
@@ -53,6 +55,7 @@ const draft = (input: TxInput, id: number): Transaction => ({
   tax: input.tax,
   source: input.source ?? "manual",
   external_id: input.externalId ?? null,
+  contract: input.contract ?? null,
   note: input.note,
   created_at: "",
   updated_at: "",
@@ -79,11 +82,11 @@ export function addTransaction(input: TxInput, now = new Date()): number | null 
     const at = now.toISOString();
     const r = db()
       .prepare(
-        `INSERT INTO transactions (account_id, date, type, asset, quantity, price, amount, fee, tax, source, external_id, note, created_at, updated_at)
-         VALUES (@accountId, @date, @type, @asset, @quantity, @price, @amount, @fee, @tax, @source, @externalId, @note, @at, @at)
+        `INSERT INTO transactions (account_id, date, type, asset, quantity, price, amount, fee, tax, source, external_id, contract, note, created_at, updated_at)
+         VALUES (@accountId, @date, @type, @asset, @quantity, @price, @amount, @fee, @tax, @source, @externalId, @contract, @note, @at, @at)
          ON CONFLICT DO NOTHING`,
       )
-      .run({ ...input, source: input.source ?? "manual", externalId: input.externalId ?? null, at });
+      .run({ ...input, source: input.source ?? "manual", externalId: input.externalId ?? null, contract: input.contract ?? null, at });
     if (r.changes === 0) return null;
     const id = Number(r.lastInsertRowid);
     // Appending in date order is the old forms' incremental update; anything back-dated is re-derived.
@@ -91,6 +94,32 @@ export function addTransaction(input: TxInput, now = new Date()): number | null 
     else applyToLegacy(getTransaction(id)!);
     return id;
   })();
+}
+
+/**
+ * A sync reading again a record it already wrote into a cash or futures wallet: refresh how it is described
+ * (type, contract, the fill's size and price, note). Its date and cash leg stay, so no balance moves.
+ * Returns whether anything changed.
+ */
+export function describeSynced(input: TxInput, now = new Date()): boolean {
+  if (input.source == null || input.externalId == null || input.asset != null) return false;
+  const r = db()
+    .prepare(
+      `UPDATE transactions SET type = @type, contract = @contract, quantity = @quantity, price = @price, note = @note, updated_at = @at
+       WHERE source = @source AND external_id = @externalId AND asset IS NULL
+         AND (type IS NOT @type OR contract IS NOT @contract OR quantity IS NOT @quantity OR price IS NOT @price OR note IS NOT @note)`,
+    )
+    .run({
+      type: input.type,
+      contract: input.contract ?? null,
+      quantity: input.quantity,
+      price: input.price,
+      note: input.note,
+      source: input.source,
+      externalId: input.externalId,
+      at: now.toISOString(),
+    });
+  return r.changes > 0;
 }
 
 /** A transaction with this id at this source is already in the ledger. */

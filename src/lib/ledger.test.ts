@@ -18,6 +18,7 @@ const t = (type: TxType, date: string, quantity: number, fields: Partial<Transac
   tax: 0,
   source: "manual",
   external_id: null,
+  contract: null,
   note: null,
   created_at: "",
   updated_at: "",
@@ -138,7 +139,7 @@ describe("ledger reads", () => {
     expect(seriesAt(c, null, "2099-01-01")).toEqual({ quantity: 100, cost: null });
   });
 
-  it("adds up a year of the synced futures wallets' PnL, fees and funding", () => {
+  it("adds up a year of the synced futures wallets' fills, PnL, fees and funding", () => {
     const id = Number(
       db().prepare("INSERT INTO accounts (kind, name, currency, source, created_at, updated_at) VALUES ('futures', 'UTA', 'USDT', 'bybit', '', '')").run()
         .lastInsertRowid,
@@ -149,7 +150,8 @@ describe("ledger reads", () => {
     cash("pnl", "2026-03-01", 120);
     cash("fee", "2026-03-01", -5);
     cash("funding", "2026-04-01", -2);
+    cash("trade", "2026-04-02", -1);
     cash("deposit", "2026-04-01", 500);
-    expect(ledgerFuturesIncome("2026")).toBe(113);
+    expect(ledgerFuturesIncome("2026")).toBe(112);
   });
 });

@@ -331,7 +331,7 @@ function FuturesAccountFields({ item, bybitAvailable }: { item?: FuturesAccount;
         </Field>
       ) : (
         <p className="text-[11px] text-fg-4 sm:col-span-2">
-          錢包餘額（統一交易帳戶＋資金帳戶的 USDT 和 USDC，USDC 以 1:1 計）、部位、標記價與強平價每分鐘同步；每 10 分鐘把資金費率、平倉損益、入金與提領記進交易紀錄。
+          錢包餘額（統一交易帳戶＋資金帳戶的 USDT 和 USDC，USDC 以 1:1 計）、部位、標記價與強平價每分鐘同步；每 10 分鐘把合約成交、資金費率、入金與提領記進交易紀錄。
         </p>
       )}
       <Field label="備註" wide>

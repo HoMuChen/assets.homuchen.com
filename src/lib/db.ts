@@ -292,6 +292,15 @@ const MIGRATIONS: ((conn: Database.Database) => void)[] = [
       );
     `);
   },
+  // v5: contract fills and funding name their contract; fills also carry their size and price (src/lib/bybit.ts).
+  (conn) => {
+    addColumn(conn, "transactions", "contract", "TEXT"); // a futures wallet's contract, e.g. 'BTCUSDT'; NULL elsewhere
+    // Read the Bybit log again from the start, so the entries already recorded get described the new way.
+    conn.exec(
+      `UPDATE settings SET value = json_set(value, '$.done', json_extract(value, '$.start'))
+       WHERE key LIKE 'bybit:cursor:futures:%' AND json_valid(value)`,
+    );
+  },
 ];
 
 /**
@@ -585,7 +594,8 @@ export type TxType =
   | "tax"
   | "adjust"
   | "funding"
-  | "pnl";
+  | "pnl"
+  | "trade";
 
 export type Transaction = {
   id: number;
@@ -600,6 +610,8 @@ export type Transaction = {
   tax: number;
   source: string;
   external_id: string | null;
+  /** A futures wallet's contract ('BTCUSDT') for its fills and funding; quantity and price are then the fill's. */
+  contract: string | null;
   note: string | null;
   created_at: string;
   updated_at: string;

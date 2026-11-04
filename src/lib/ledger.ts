@@ -196,12 +196,12 @@ export function seriesAt(accountId: number, asset: string | null, date: string) 
   return { quantity, cost };
 }
 
-/** Realized PnL, trading fees and funding of the synced futures wallets within a calendar year, in USDT. */
+/** Contract fills (realized PnL net of fees), other fees and funding of the synced futures wallets within a calendar year, in USDT. */
 export function ledgerFuturesIncome(year: string): number {
   const r = db()
     .prepare(
       `SELECT COALESCE(SUM(t.amount), 0) AS n FROM transactions t JOIN accounts a ON a.id = t.account_id
-       WHERE a.kind = 'futures' AND t.type IN ('pnl', 'fee', 'funding') AND t.date LIKE ?`,
+       WHERE a.kind = 'futures' AND t.type IN ('trade', 'pnl', 'fee', 'funding') AND t.date LIKE ?`,
     )
     .get(`${year}-%`) as { n: number };
   return r.n;

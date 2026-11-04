@@ -19,7 +19,7 @@ import { getAccount, instruments, ledgerHoldings, saveInstrument } from "./ledge
 import { coinPricesTwd, resolveCoin } from "./prices";
 import { getSetting, setSetting } from "./settings";
 import { taipeiDate } from "./time";
-import { addTransaction, LedgerError, type TxInput } from "./transactions";
+import { addTransaction, describeSynced, LedgerError, type TxInput } from "./transactions";
 import { assetId } from "./tx";
 
 const BASE_URL = () => process.env.BYBIT_BASE_URL || "https://api.bybit.com";
@@ -132,6 +132,11 @@ export type LogEntry = {
   cashFlow: string;
   fee: string;
   change: string;
+  /** Contracts: the fill's size, unsigned; "" on entries that aren't fills. */
+  qty: string;
+  /** Contracts: the position after the entry, signed (a short is negative). */
+  size: string;
+  tradePrice: string;
 };
 export type Fill = {
   symbol: string;
@@ -343,12 +348,45 @@ async function fetchFlows(now: number): Promise<Flow[]> {
 
 const dateOf = (t: number) => taipeiDate(new Date(t));
 
+const units = (n: number) => String(Math.abs(n));
+const usdt2 = (n: number) => `${n > 0 ? "+" : n < 0 ? "-" : ""}${Math.abs(n).toFixed(2)}`;
+/** The position a log entry leaves behind, in contracts: '多單 0.12', '空單 0.05'. */
+const holdingAfter = (size: number) => (size > 0 ? `多單 ${units(size)}` : size < 0 ? `空單 ${units(size)}` : "無持倉");
+
+/**
+ * What a contract fill did to the position, from its size and the position after it: '開多 → 多單 0.05',
+ * '加多 → 多單 0.12', '減空 → 空單 0.02，損益 +3.10', '平多，損益 -12.40', '反手做空 → 空單 0.03，損益 +1.00'.
+ * The PnL is Bybit's cash flow, before the fee. Without a position size, only the side.
+ */
+export function fillNote(e: LogEntry): string {
+  const qty = Math.abs(num(e.qty));
+  if (e.size === "" || e.size == null || !qty) return e.side === "Buy" ? "買" : e.side === "Sell" ? "賣" : "";
+  const after = num(e.size);
+  const before = after - (e.side === "Sell" ? -qty : qty);
+  const eps = qty * 1e-9;
+  const dir = (n: number) => (n > 0 ? "多" : "空");
+  const action =
+    Math.abs(before) <= eps
+      ? `開${dir(after)}`
+      : Math.abs(after) <= eps
+        ? `平${dir(before)}`
+        : Math.sign(before) !== Math.sign(after)
+          ? `反手做${dir(after)}`
+          : Math.abs(after) > Math.abs(before)
+            ? `加${dir(after)}`
+            : `減${dir(after)}`;
+  const pnl = num(e.cashFlow);
+  return [Math.abs(after) <= eps ? action : `${action} → ${holdingAfter(after)}`, pnl ? `損益 ${usdt2(pnl)}` : null].filter(Boolean).join("，");
+}
+
+const EVENT: Record<string, string> = { LIQUIDATION: "強制平倉", ADL: "自動減倉", DELIVERY: "交割" };
+
 /** One entry of a margin coin's transaction log as a ledger transaction; null for what isn't a balance change. */
 export function logEntryTx(e: LogEntry, accountId: number): TxInput | null {
   const amount = num(e.change);
   if (!amount) return null;
   const side = e.side === "Buy" ? " 買" : e.side === "Sell" ? " 賣" : "";
-  const as = (type: TxType, note: string): TxInput => ({
+  const as = (type: TxType, note: string | null): TxInput => ({
     accountId,
     date: dateOf(ms(e.transactionTime)),
     type,
@@ -363,21 +401,30 @@ export function logEntryTx(e: LogEntry, accountId: number): TxInput | null {
     // Bybit's id alone isn't unique across a trade's fee and funding entries.
     externalId: `bybit:log:${e.id}|${e.type}|${e.currency}|${e.transactionTime}|${e.change}`,
   });
+  /** A contract fill: its contract, signed size (+ bought, - sold) and price, in the contract's own units. */
+  const fill = (type: TxType, note: string): TxInput => {
+    const qty = Math.abs(num(e.qty));
+    return {
+      ...as(type, note),
+      contract: e.symbol || null,
+      quantity: qty ? (e.side === "Sell" ? -qty : qty) : 0,
+      price: optNum(e.tradePrice),
+    };
+  };
   switch (e.type) {
     // Funding ↔ Unified: both are this wallet. Money from outside comes in through the deposit records.
     case "TRANSFER_IN":
     case "TRANSFER_OUT":
       return null;
     case "TRADE":
-      return e.category === "spot"
-        ? as("transfer", `現貨 ${e.symbol}${side}`)
-        : as(num(e.cashFlow) ? "pnl" : "fee", `${e.symbol}${side}`);
+      // The amount is what the fill did to the wallet: the fee alone when opening, the PnL net of it when closing.
+      return e.category === "spot" ? as("transfer", `現貨 ${e.symbol}${side}`) : fill("trade", fillNote(e));
     case "SETTLEMENT":
-      return as("funding", e.symbol);
+      return { ...as("funding", num(e.size) ? holdingAfter(num(e.size)) : null), contract: e.symbol || null };
     case "LIQUIDATION":
     case "ADL":
     case "DELIVERY":
-      return as("pnl", `${e.symbol} ${e.type}`);
+      return fill("pnl", [EVENT[e.type], fillNote(e)].filter(Boolean).join("，"));
     case "INTEREST":
       return as("fee", "借款利息");
     case "FEE_REFUND":
@@ -529,7 +576,8 @@ export async function runSync(mode: SyncMode, now = new Date()): Promise<SyncRes
         db().transaction(() => {
           for (const e of log) {
             const tx = logEntryTx(e, account.id);
-            if (tx) addTransaction(tx, now);
+            // One already recorded is described again: entries from before v5 lack the fill's details.
+            if (tx && addTransaction(tx, now) == null) describeSynced(tx, now);
           }
           for (const f of flows.filter((x) => isMargin(x.coin) && x.time >= cursor.start)) {
             addTransaction(

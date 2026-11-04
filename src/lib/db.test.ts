@@ -101,6 +101,21 @@ describe("schema migrations", () => {
     expect(conn.prepare("SELECT COUNT(*) AS n FROM cash_accounts").get()).toEqual({ n: 1 });
   });
 
+  it("v5: names contracts on transactions and rewinds the Bybit log cursor so it is read again", () => {
+    conn = new Database(":memory:");
+    migrate(conn);
+    expect(columns(conn, "transactions")).toContain("contract");
+    conn.pragma("user_version = 4");
+    const set = conn.prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, '')");
+    set.run("bybit:cursor:futures:3", JSON.stringify({ start: 100, done: 900 }));
+    set.run("bybit:cursor:spot:4", JSON.stringify({ start: 100, done: 900 }));
+    migrate(conn);
+    const cursor = (key: string) => JSON.parse((conn!.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string }).value);
+    expect(cursor("bybit:cursor:futures:3")).toEqual({ start: 100, done: 100 });
+    expect(cursor("bybit:cursor:spot:4")).toEqual({ start: 100, done: 900 });
+    expect(conn.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION);
+  });
+
   it("keeps running on a newer schema, so a rolled-back image still starts", () => {
     conn = new Database(":memory:");
     migrate(conn);

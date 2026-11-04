@@ -44,7 +44,8 @@ export default async function TransactionsPage(props: PageProps<"/transactions">
   const series = account && (asset || cashLike(account.kind)) ? seriesTx(account.id, asset ?? null) : null;
   const state = series && asset ? replay(series) : null;
   const label = asset ? (instruments().get(asset)?.symbol ?? asset) : null;
-  const unitDigits = (k: AccountKind) => (k === "crypto" ? 8 : 0);
+  // Coins and contracts trade in fractions; shares don't.
+  const unitDigits = (k: AccountKind) => (k === "stock" ? 0 : 8);
 
   return (
     <>
@@ -186,18 +187,25 @@ export default async function TransactionsPage(props: PageProps<"/transactions">
                           <span>
                             <span className="num text-fg-2">{t.symbol}</span> <span className="text-[12px] text-fg-4">{t.name}</span>
                           </span>
+                        ) : t.contract ? (
+                          <span className="num text-fg-2">{t.contract}</span>
                         ) : (
                           <span className="text-fg-4">餘額</span>
                         )}
                       </td>
-                      <td className={`${td} num text-right`}>{t.asset && t.quantity ? signed(t.quantity, unitDigits(t.account_kind)) : "—"}</td>
-                      <td className={`${td} num text-right text-fg-3`}>{t.price != null ? fmtPrice(t.price) : "—"}</td>
+                      <td className={`${td} num text-right`}>{t.quantity ? signed(t.quantity, unitDigits(t.account_kind)) : "—"}</td>
+                      <td className={`${td} num text-right text-fg-3`}>
+                        {/* A contract's fill price exactly as the exchange reports it, ticks included. */}
+                        {t.price == null ? "—" : t.contract ? fmtNum(t.price, 8) : fmtPrice(t.price)}
+                      </td>
                       <td className={`${td} num text-right`}>
                         {t.amount ? signed(t.amount, cashLike(t.account_kind) ? 2 : 0) : "—"}
                         {t.amount && t.account_currency !== "TWD" ? <span className="ml-1 text-[11px] text-fg-4">{t.account_currency}</span> : null}
                       </td>
-                      <td className={`${td} num text-right text-fg-3`}>{t.fee || t.tax ? `${fmtNum(t.fee, 0)} / ${fmtNum(t.tax, 0)}` : "—"}</td>
-                      <td className={`${td} max-w-[180px] truncate text-[12px] text-fg-3`} title={t.note ?? undefined}>
+                      <td className={`${td} num text-right text-fg-3`}>
+                        {!t.fee && !t.tax ? "—" : cashLike(t.account_kind) ? fmtNum(t.fee, 4) : `${fmtNum(t.fee, 0)} / ${fmtNum(t.tax, 0)}`}
+                      </td>
+                      <td className={`${td} max-w-[240px] truncate text-[12px] text-fg-3`} title={t.note ?? undefined}>
                         {t.note}
                       </td>
                       <td className={`${td} sticky right-0 w-px bg-panel text-right`}>
